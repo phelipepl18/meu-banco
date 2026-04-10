@@ -4,124 +4,124 @@ import pandas as pd
 from datetime import datetime
 
 # Configuração da Página
-st.set_page_config(page_title="Bank Pro Ultra", page_icon="💰", layout="wide")
-
-# Estilização Customizada (Cores e Layout)
-st.markdown("""
-    <style>
-    .stTabs [data-baseweb="tab-list"] { gap: 10px; }
-    .stTabs [data-baseweb="tab"] { height: 50px; border-radius: 10px; background-color: #1e2130; color: white; }
-    .stTabs [data-baseweb="tab"]:hover { background-color: #2b3044; }
-    .entrada { color: #28a745; font-weight: bold; }
-    .saida { color: #dc3545; font-weight: bold; }
-    div[data-testid="stExpander"] { border-radius: 15px; }
-    </style>
-    """, unsafe_allow_html=True)
+st.set_page_config(page_title="Bank Pro Premium", page_icon="🏦", layout="centered")
 
 # Conexão com Google Sheets
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# Função para carregar dados de uma aba específica
-def carregar_dados(aba="Transacoes"):
+# Função para carregar dados de abas específicas
+def carregar(aba):
     try:
-        df = conn.read(worksheet=aba, ttl="0")
-        return df.dropna(how='all')
+        return conn.read(worksheet=aba, ttl="0").dropna(how='all')
     except:
         if aba == "Cartoes":
             return pd.DataFrame(columns=["Nome", "Vencimento", "Limite", "Gasto"])
-        return pd.DataFrame(columns=["Data", "Categoria", "Descricao", "Valor", "Tipo"])
+        return pd.DataFrame(columns=["Data", "Valor", "Descricao"])
 
-df = carregar_dados("Transacoes")
-df_cartoes = carregar_dados("Cartoes")
+# CSS para Cores e Estilo iPhone
+st.markdown("""
+    <style>
+    .entrada { color: #28a745; font-weight: bold; font-size: 18px; }
+    .saida { color: #dc3545; font-weight: bold; font-size: 18px; }
+    .card { background-color: #1e2130; padding: 15px; border-radius: 10px; margin-bottom: 10px; border: 1px solid #333; }
+    </style>
+    """, unsafe_allow_html=True)
 
-# --- MENU LATERAL / PÁGINAS ---
-st.sidebar.title("🏦 Bank Pro Ultra")
-pagina = st.sidebar.radio("Navegar", ["Geral", "Uber 🚗", "99 Pop 🚙", "Cartões de Crédito 💳"])
+# Menu Lateral
+st.sidebar.title("🏦 Menu Principal")
+pagina = st.sidebar.radio("Selecione a Área", ["Página Geral", "Uber 🚗", "99 Pop 🚙", "Cartões 💳"])
 
-# --- FUNÇÃO PARA EXIBIR EXTRATO COLORIDO ---
-def exibir_extrato(dataframe_filtrado):
-    if not dataframe_filtrado.empty:
-        st.write("### 📜 Extrato")
-        # Criando versão visual do extrato
-        for _, row in dataframe_filtrado.sort_index(ascending=False).iterrows():
-            cor = "green" if "Entrada" in row['Tipo'] else "red"
-            simbolo = "+" if "Entrada" in row['Tipo'] else "-"
-            with st.container():
-                st.markdown(f"""
-                **{row['Data']}** | {row['Descricao']}  
-                <span style='color:{cor}; font-size: 20px;'>{simbolo} R$ {row['Valor']:.2f}</span>
-                <hr style='margin: 10px 0;'>
-                """, unsafe_allow_html=True)
+# --- LÓGICA DE EXTRATO COLORIDO ---
+def mostrar_extrato(df_extrato, col_desc="Descricao", mostrar_tipo=True):
+    if not df_extrato.empty:
+        for _, row in df_extrato.sort_index(ascending=False).iterrows():
+            # Na Uber/99 tudo é gasto (vermelho), na Geral depende do Tipo
+            is_saida = True
+            if mostrar_tipo and "Entrada" in str(row.get('Tipo', '')):
+                is_saida = False
+            
+            classe = "saida" if is_saida else "entrada"
+            simbolo = "-" if is_saida else "+"
+            
+            st.markdown(f"""
+            <div class="card">
+                <small>{row['Data']}</small><br>
+                <b>{row[col_desc]}</b><br>
+                <span class="{classe}">{simbolo} R$ {row['Valor']:.2f}</span>
+            </div>
+            """, unsafe_allow_html=True)
     else:
-        st.info("Nenhum registro encontrado nesta categoria.")
+        st.info("Ainda não há registros aqui.")
 
 # --- PÁGINA GERAL ---
-if pagina == "Geral":
-    st.header("Resumo Geral")
-    aba_add, aba_extrato = st.tabs(["➕ Novo Lançamento", "📑 Extrato Completo"])
+if pagina == "Página Geral":
+    st.header("🏠 Resumo Geral")
+    df_geral = carregar("Geral")
     
-    with aba_add:
+    with st.expander("➕ Novo Lançamento Geral"):
         with st.form("form_geral"):
-            col1, col2 = st.columns(2)
-            data = col1.date_input("Data", datetime.now())
-            tipo = col2.selectbox("Tipo", ["Saída 📉", "Entrada 📈"])
-            cat = st.selectbox("Categoria", ["Alimentação", "Lazer", "Uber 🚗", "99 Pop 🚙", "Cartão 💳", "Outros"])
-            desc = st.text_input("Descrição")
-            valor = st.number_input("Valor (R$)", min_value=0.0, step=0.01)
-            
-            if st.form_submit_button("Salvar Registro"):
-                nova_linha = pd.DataFrame([{"Data": data.strftime("%d/%m/%Y"), "Categoria": cat, "Descricao": desc, "Valor": valor, "Tipo": tipo}])
-                df = pd.concat([df, nova_linha], ignore_index=True)
-                conn.update(worksheet="Transacoes", data=df)
-                st.success("Salvo!")
+            data_g = st.date_input("Data", datetime.now())
+            tipo_g = st.selectbox("Tipo", ["Saída 📉", "Entrada 📈"])
+            cat_g = st.selectbox("Categoria", ["Alimentação", "Lazer", "Uber (Geral)", "99 (Geral)", "Outros"])
+            desc_g = st.text_input("Descrição")
+            valor_g = st.number_input("Valor R$", min_value=0.0)
+            if st.form_submit_button("Salvar na Geral"):
+                nova = pd.DataFrame([{"Data": data_g.strftime("%d/%m/%Y"), "Categoria": cat_g, "Descricao": desc_g, "Valor": valor_g, "Tipo": tipo_g}])
+                df_geral = pd.concat([df_geral, nova], ignore_index=True)
+                conn.update(worksheet="Geral", data=df_geral)
                 st.rerun()
-
-    with aba_extrato:
-        exibir_extrato(df)
-
-# --- PÁGINAS ESPECÍFICAS (UBER / 99) ---
-elif pagina in ["Uber 🚗", "99 Pop 🚙"]:
-    st.header(f"Gerenciamento - {pagina}")
-    categoria_filtro = "Uber 🚗" if "Uber" in pagina else "99 Pop 🚙"
     
-    with st.expander("➕ Adicionar Corrida/Gasto"):
-        with st.form(f"form_{pagina}"):
-            data_p = st.date_input("Data")
-            tipo_p = st.selectbox("Tipo", ["Saída 📉", "Entrada 📈"])
-            desc_p = st.text_input("Detalhes")
-            valor_p = st.number_input("Valor (R$) ", min_value=0.0)
-            if st.form_submit_button("Lançar"):
-                nova = pd.DataFrame([{"Data": data_p.strftime("%d/%m/%Y"), "Categoria": categoria_filtro, "Descricao": desc_p, "Valor": valor_p, "Tipo": tipo_p}])
-                df = pd.concat([df, nova], ignore_index=True)
-                conn.update(worksheet="Transacoes", data=df)
-                st.rerun()
+    mostrar_extrato(df_geral)
 
-    df_filtrado = df[df['Categoria'] == categoria_filtro]
-    exibir_extrato(df_filtrado)
+# --- PÁGINAS INDEPENDENTES (UBER E 99) ---
+elif pagina in ["Uber 🚗", "99 Pop 🚙"]:
+    nome_aba = "Uber" if "Uber" in pagina else "99Pop"
+    st.header(f"💰 Controle {pagina}")
+    df_esp = carregar(nome_aba)
+    
+    with st.form(f"form_{nome_aba}"):
+        st.write("Adicionar Data e Valor")
+        col_d, col_v = st.columns(2)
+        data_e = col_d.date_input("Data", datetime.now(), key=f"dt_{nome_aba}")
+        valor_e = col_v.number_input("Valor R$", min_value=0.0, key=f"vl_{nome_aba}")
+        desc_e = st.text_input("Descrição Opcional", "Corrida", key=f"ds_{nome_aba}")
+        
+        if st.form_submit_button(f"Salvar em {nome_aba}"):
+            nova_e = pd.DataFrame([{"Data": data_e.strftime("%d/%m/%Y"), "Valor": valor_e, "Descricao": desc_e}])
+            df_esp = pd.concat([df_esp, nova_e], ignore_index=True)
+            conn.update(worksheet=nome_aba, data=df_esp)
+            st.success(f"Adicionado à lista da {nome_aba}!")
+            st.rerun()
+    
+    st.markdown("---")
+    st.subheader(f"Extrato {nome_aba}")
+    mostrar_extrato(df_esp, mostrar_tipo=False) # Tudo aqui é saída
 
 # --- PÁGINA DE CARTÕES ---
-elif pagina == "Cartões de Crédito 💳":
-    st.header("Meus Cartões")
+elif pagina == "Cartões 💳":
+    st.header("💳 Gerenciar Cartões")
+    df_c = carregar("Cartoes")
     
-    with st.expander("➕ Cadastrar Novo Cartão"):
-        with st.form("novo_cartao"):
-            nome = st.text_input("Nome do Cartão (Ex: Nubank)")
-            venc = st.number_input("Dia do Vencimento", 1, 31)
-            limite = st.number_input("Limite Total", min_value=0.0)
-            gasto = st.number_input("Valor já Gasto", min_value=0.0)
-            if st.form_submit_button("Adicionar Cartão"):
-                novo_c = pd.DataFrame([{"Nome": nome, "Vencimento": venc, "Limite": limite, "Gasto": gasto}])
-                df_cartoes = pd.concat([df_cartoes, novo_c], ignore_index=True)
-                conn.update(worksheet="Cartoes", data=df_cartoes)
+    with st.expander("➕ Adicionar Novo Cartão"):
+        with st.form("add_cartao"):
+            n = st.text_input("Nome do Cartão")
+            v = st.number_input("Dia do Vencimento", 1, 31)
+            lim = st.number_input("Limite Total R$", min_value=0.0)
+            gast = st.number_input("Gasto Atual R$", min_value=0.0)
+            if st.form_submit_button("Cadastrar"):
+                nc = pd.DataFrame([{"Nome": n, "Vencimento": v, "Limite": lim, "Gasto": gast}])
+                df_c = pd.concat([df_c, nc], ignore_index=True)
+                conn.update(worksheet="Cartoes", data=df_c)
                 st.rerun()
 
-    if not df_cartoes.empty:
-        for _, c in df_cartoes.iterrows():
-            disponivel = c['Limite'] - c['Gasto']
-            st.subheader(f"💳 {c['Nome']}")
-            col1, col2, col3 = st.columns(3)
-            col1.metric("Gasto Atual", f"R$ {c['Gasto']:.2f}", delta_color="inverse")
-            col2.metric("Limite Disponível", f"R$ {disponivel:.2f}")
-            col3.write(f"📅 Vencimento: Dia {c['Vencimento']}")
-            st.progress(min(c['Gasto']/c['Limite'], 1.0))
-            st.write("---")
+    for _, c in df_c.iterrows():
+        disp = c['Limite'] - c['Gasto']
+        st.markdown(f"""
+        <div class="card">
+            <h3>{c['Nome']}</h3>
+            <p>Vencimento: Dia {c['Vencimento']}</p>
+            <p>Gasto: <span class="saida">R$ {c['Gasto']:.2f}</span></p>
+            <p>Disponível: <span class="entrada">R$ {disp:.2f}</span></p>
+        </div>
+        """, unsafe_allow_html=True)
+        st.progress(min(c['Gasto']/c['Limite'], 1.0) if c['Limite'] > 0 else 0)
