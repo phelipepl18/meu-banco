@@ -43,12 +43,17 @@ if pagina == "Resumo do Dia":
     
     hoje = datetime.now().strftime("%d/%m/%Y")
     
-    # Cálculos
-    ganho_u = df_u[df_u['Data'] == hoje]['Valor'].sum()
-    ganho_n = df_n[df_n['Data'] == hoje]['Valor'].sum()
+    # Cálculos com proteção contra erro de coluna ausente
+    ganho_u = df_u[df_u['Data'] == hoje]['Valor'].sum() if 'Valor' in df_u.columns else 0
+    ganho_n = df_n[df_n['Data'] == hoje]['Valor'].sum() if 'Valor' in df_n.columns else 0
     total_ganho = ganho_u + ganho_n
     
-    gastos_hoje = df_g[(df_g['Data'] == hoje) & (df_g['Tipo'] == "Saída 📉")]['Valor'].sum()
+    # Verifica se as colunas existem na aba Geral antes de calcular
+    if 'Data' in df_g.columns and 'Tipo' in df_g.columns and 'Valor' in df_g.columns:
+        gastos_hoje = df_g[(df_g['Data'] == hoje) & (df_g['Tipo'] == "Saída 📉")]['Valor'].sum()
+    else:
+        gastos_hoje = 0
+        
     lucro_liquido = total_ganho - gastos_hoje
     
     # Cards de Resumo
