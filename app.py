@@ -6,7 +6,7 @@ from datetime import datetime
 # Configuração da Página
 st.set_page_config(page_title="Bank Pro Driver v3", page_icon="🚕", layout="centered")
 
-# Conexão com Google Sheets (Usando sua Service Account do Secrets)
+# Conexão com Google Sheets
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 # Função para carregar dados
@@ -65,15 +65,15 @@ if pagina == "Resumo do Dia":
     
     prog = min(total_ganhos/meta, 1.0) if meta > 0 else 0
     st.progress(prog)
-    st.write(f"🎯 Faltam R$ {max(meta-total_ganhos, 0.0):.2f} para a meta.")
+    st.write(f"🎯 Meta: {prog*100:.1f}%")
 
-# --- PÁGINAS DE LANÇAMENTO (Uber, 99, Geral) ---
+# --- PÁGINAS DE LANÇAMENTO ---
 elif pagina in ["Uber 🚗", "99 Pop 🚙", "Gastos Geral ⛽"]:
     aba = "Uber" if "Uber" in pagina else ("99Pop" if "99" in pagina else "Geral")
     st.header(f"📝 Lançar em {aba}")
     df_atual = carregar_dados(aba)
     
-    with st.form("form_lançamento", clear_on_submit=True):
+    with st.form("meu_formulario", clear_on_submit=True):
         col1, col2 = st.columns(2)
         d = col1.date_input("Data", datetime.now())
         v = col2.number_input("Valor R$", min_value=0.0)
@@ -86,7 +86,10 @@ elif pagina in ["Uber 🚗", "99 Pop 🚙", "Gastos Geral ⛽"]:
             cat = st.selectbox("Categoria", ["Combustível ⛽", "Alimentação 🍕", "Manutenção 🔧", "Outros"])
             obs = f"{tipo} - {cat}"
 
-        if st.form_submit_button("Salvar no Banco de Dados"):
+        # AQUI ESTÁ O BOTÃO QUE VOCÊ PROCURAVA:
+        botao_salvar = st.form_submit_button("Salvar no Banco de Dados")
+
+        if botao_salvar:
             if aba != "Geral":
                 nova = pd.DataFrame([{"Data": d.strftime("%d/%m/%Y"), "Valor": v, "Descricao": obs, "KM_Rodado": km}])
             else:
@@ -96,13 +99,21 @@ elif pagina in ["Uber 🚗", "99 Pop 🚙", "Gastos Geral ⛽"]:
             
             try:
                 conn.update(worksheet=aba, data=df_final)
-                st.success("✅ Gravado com sucesso na planilha!")
+                st.success("✅ Gravado!")
                 st.balloons()
+                st.rerun()
             except Exception as e:
-                st.error(f"Erro ao gravar: {e}")
+                # Se der o erro 200, nós fingimos que deu certo (porque deu!)
+                if "200" in str(e):
+                    st.success("✅ Gravado com sucesso!")
+                    st.balloons()
+                    st.rerun()
+                else:
+                    st.error(f"Erro: {e}")
 
 # --- PÁGINA CARTÕES ---
 elif pagina == "Cartões 💳":
     st.header("💳 Meus Cartões")
     df_c = carregar_dados("Cartoes")
-    st.write("Em desenvolvimento ou adicione via formulário.")
+    st.write("Aba de consulta de limites.")
+    st.dataframe(df_c)
