@@ -9,20 +9,20 @@ st.set_page_config(page_title="Bank Pro Driver v3", page_icon="🚕", layout="ce
 # Conexão com Google Sheets
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# --- FUNÇÃO PARA CARREGAR DADOS ---
+# --- FUNÇÃO PARA CARREGAR DADOS (VERSÃO SEM CACHE) ---
 def carregar_dados(nome_aba):
     try:
-        # ttl="0" garante que ele sempre tente ler o dado mais novo
-        df = conn.read(worksheet=nome_aba, ttl="0")
+        # Usamos ttl=0 e st.cache_data.clear() para garantir que o dado é novo
+        df = conn.read(worksheet=nome_aba, ttl=0) 
         return df.dropna(how='all')
-    except Exception:
+    except Exception as e:
+        # Se der erro na leitura, ele cria as colunas para não travar o resumo
         if nome_aba == "Cartoes":
             return pd.DataFrame(columns=["Nome", "Vencimento", "Limite", "Gasto"])
         elif nome_aba in ["Uber", "99Pop"]:
             return pd.DataFrame(columns=["Data", "Valor", "Descricao", "KM_Rodado"])
         else:
             return pd.DataFrame(columns=["Data", "Categoria", "Descricao", "Valor", "Tipo"])
-
 # --- ESTILO VISUAL ---
 st.markdown("""
     <style>
