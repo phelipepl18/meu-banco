@@ -12,16 +12,15 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 # --- FUNÇÃO PARA CARREGAR DADOS ---
 def carregar_dados(nome_aba):
     try:
-        # ttl=0 obriga o app a buscar o dado novo no Google sempre
+        # Forçamos o TTL para 0 para não usar memória antiga
         df = conn.read(worksheet=nome_aba, ttl=0)
-        return df.dropna(how='all')
+        return df
     except Exception:
-        if nome_aba == "Cartoes":
-            return pd.DataFrame(columns=["Data", "Nome", "Vencimento", "Limite", "Gasto"])
-        elif nome_aba in ["Uber", "99Pop"]:
-            return pd.DataFrame(columns=["Data", "Valor", "Descricao", "KM_Rodado"])
-        else:
+        # Se a aba não existir ou estiver vazia, cria o esqueleto
+        if nome_aba == "Geral":
             return pd.DataFrame(columns=["Data", "Categoria", "Descricao", "Valor", "Tipo"])
+        else:
+            return pd.DataFrame(columns=["Data", "Valor", "Descricao", "KM_Rodado"])
 
 # Menu Lateral
 st.sidebar.title("🚕 Painel do Motorista")
@@ -30,48 +29,71 @@ pagina = st.sidebar.radio("Selecione:", ["Resumo do Dia", "Uber 🚗", "99 Pop �
 # --- PÁGINA: GASTOS GERAL ⛽ ---
 if pagina == "Gastos Geral ⛽":
     st.header("⛽ Lançar Gastos")
+    
+    # Carregamos os dados atuais
     df_g = carregar_dados("Geral")
     
     with st.form("form_gastos", clear_on_submit=True):
         tipo = st.selectbox("Tipo", ["Saída 📉", "Entrada 📈"])
         cat = st.selectbox("Categoria", ["Combustível ⛽", "Alimentação 🍕", "Manutenção 🔧", "Outros"])
-        vlr = st.number_input("Valor R$", min_value=0.0)
-        dat = st.date_input("Data", datetime.now()) # Aqui ele pega o calendário
+        vlr = st.number_input("Valor R$", min_value=0.0, step=0.01)
+        dat = st.date_input("Data", datetime.now())
         
         btn_salvar = st.form_submit_button("Salvar Gasto")
 
         if btn_salvar:
-            # FORÇANDO O FORMATO BRASILEIRO (DIA/MÊS/ANO)
-            data_formatada = dat.strftime("%d/%m/%Y")
+            # FORMATAMOS A DATA PARA O PADRÃO BRASIL: DIA/MÊS/ANO
+            data_br = dat.strftime("%d/%m/%Y")
             
             nova_linha = pd.DataFrame([{
-                "Data": data_formatada, 
+                "Data": data_br, 
                 "Categoria": cat, 
                 "Valor": vlr, 
                 "Tipo": tipo, 
                 "Descricao": ""
             }])
             
-            df_final = pd.concat([df_g, nova_linha], ignore_index=True)
+            # Unimos o novo dado ao DataFrame existente
+            if df_g is not None and not df_g.empty:
+                df_final = pd.concat([df_g, nova_linha], ignore_index=True)
+            else:
+                df_final = nova_linha
             
             try:
+                # Envia para a planilha
                 conn.update(worksheet="Geral", data=df_final)
-                st.cache_data.clear() # Limpa o cache para o extrato atualizar
-                st.success(f"✅ Gravado: R$ {vlr:.2f} em {data_formatada}")
-                st.rerun()
+                st.cache_data.clear() # Limpa o cache
+                st.success(f"✅ Gravado: R$ {vlr:.2f}")
+                st.rerun() # Recarrega a página para atualizar o extrato
             except Exception as e:
                 if "200" in str(e):
                     st.cache_data.clear()
                     st.rerun()
                 else:
-                    st.error(f"Erro: {e}")
+                    st.error(f"Erro ao salvar: {e}")
     
     st.write("---")
     st.subheader("📋 Extrato de Gastos")
-    if not df_g.empty:
-        # Mostra os lançamentos mais novos primeiro
-        st.dataframe(df_g.sort_index(ascending=False), use_container_width=True)
+    
+    # FORÇAMOS A EXIBIÇÃO: Se o DF existir, ele mostra
+    if df_g is not None and not df_g.empty:
+        st.dataframe(df_g.tail(10), use_container_width=True)
     else:
-        st.info("O extrato está vazio. Verifique se o nome da aba na planilha é exatamente 'Geral'.")
+        st.warning("O extrato ainda está vazio no Google Sheets.")
 
-# (Aqui viriam as outras páginas Uber e 99 seguindo a mesma lógica...)
+# --- PÁGINAS UBER E 99 (Simplificadas para funcionar) ---
+elif pagina in ["Uber 🚗", "99 Pop 🚙"]:
+    aba = "Uber" if "Uber" in pagina else "99Pop"
+    st.header(f"💰 Ganhos {aba}")
+    df_app = carregar_dados(aba)
+    
+    with st.form(f"form_{aba}", clear_on_submit=True):
+        d = st.date_input("Data", datetime.now())
+        v = st.number_input("Valor R$", min_value=0.0)
+        if st.form_submit_button("Salvar"):
+            nova = pd.DataFrame([{"Data": d.strftime("%d/%m/%Y"), "Valor": v}])
+            df_f = pd.concat([df_app, nova], ignore_index=True)
+            conn.update(worksheet=aba, data=df_f)
+            st.cache_data.clear()
+            st.rerun()
+    st.dataframe(df_app)
