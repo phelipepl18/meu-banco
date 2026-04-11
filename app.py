@@ -99,7 +99,27 @@ elif pagina in ["Uber 🚗", "99 Pop 🚙", "Gastos Geral ⛽"]:
             
             try:
                 conn.update(worksheet=aba, data=df_final)
-                st.success("✅ Gravado!")
+                try:
+                # 1. Envia os dados para o Google
+                conn.update(worksheet=aba, data=df_final)
+                
+                # 2. LIMPA O CACHE (Isso força o app a ler a planilha de novo)
+                st.cache_data.clear()
+                
+                st.success("✅ Gravado com sucesso!")
+                st.balloons()
+                
+                # 3. Dá um tempo pequeno e reinicia para atualizar o resumo
+                st.rerun()
+                
+            except Exception as e:
+                if "200" in str(e):
+                    st.cache_data.clear() # Limpa mesmo no erro falso
+                    st.success("✅ Gravado com sucesso!")
+                    st.balloons()
+                    st.rerun()
+                else:
+                    st.error(f"Erro: {e}")st.success("✅ Gravado!")
                 st.balloons()
                 st.rerun()
             except Exception as e:
