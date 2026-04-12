@@ -42,23 +42,43 @@ if pagina == "Gastos Geral ⛽":
         btn_salvar = st.form_submit_button("Salvar Gasto")
 
         if btn_salvar:
-            # FORMATAMOS A DATA PARA O PADRÃO BRASIL: DIA/MÊS/ANO
             data_br = dat.strftime("%d/%m/%Y")
-            
             nova_linha = pd.DataFrame([{
                 "Data": data_br, 
                 "Categoria": cat, 
+                "Descricao": "", # Certifique-se que na planilha está 'Descricao'
                 "Valor": vlr, 
-                "Tipo": tipo, 
-                "Descricao": ""
+                "Tipo": tipo
             }])
             
-            # Unimos o novo dado ao DataFrame existente
-            if df_g is not None and not df_g.empty:
-                df_final = pd.concat([df_g, nova_linha], ignore_index=True)
-            else:
-                df_final = nova_linha
+            # Garante que as colunas fiquem na ordem certa da Imagem 3
+            df_final = pd.concat([df_g, nova_linha], ignore_index=True)
             
+            try:
+                conn.update(worksheet="Geral", data=df_final)
+                st.cache_data.clear() # Limpa o cache para obrigar a nova leitura
+                st.success(f"✅ Gravado com sucesso!")
+                st.rerun() 
+            except Exception as e:
+                if "200" in str(e):
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                    st.error(f"Erro: {e}")
+    
+    st.write("---")
+    st.subheader("📋 Extrato de Gastos")
+    
+    # FORÇAMOS UMA NOVA LEITURA AQUI PARA EXIBIR
+    df_exibir = carregar_dados("Geral")
+    
+    if not df_exibir.empty:
+        # Reordenar as colunas para bater com a Imagem 3
+        df_exibir = df_exibir[["Data", "Categoria", "Descricao", "Valor", "Tipo"]]
+        st.dataframe(df_exibir.tail(10), use_container_width=True)
+    else:
+        st.warning("O extrato ainda está vazio. Verifique se clicou em 'Salvar'.")
+
             try:
                 # Envia para a planilha
                 conn.update(worksheet="Geral", data=df_final)
