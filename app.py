@@ -7,7 +7,7 @@ import uuid
 # Configuração da Página
 st.set_page_config(page_title="Bank Pro Driver", layout="wide")
 
-# Estilo CSS Personalizado
+# Estilo CSS
 st.markdown("""
     <style>
     [data-testid="stSidebar"] {display: none;}
@@ -22,6 +22,7 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 def carregar_dados(nome_aba):
     try:
+        # ttl=0 garante que ele busque o dado mais fresco possível
         df = conn.read(worksheet=nome_aba, ttl=0)
         if not df.empty:
             for col in ['Valor', 'Limite', 'Parcelas']:
@@ -53,11 +54,13 @@ if btn_cartao: st.session_state.pagina = "Cartao"
 # --- PÁGINA: GERAL ---
 if st.session_state.pagina == "Geral":
     hoje = datetime.now().strftime("%d/%m/%Y")
-    df_u = carregar_dados("Uber"); df_n = carregar_dados("99Pop"); df_g = carregar_dados("Geral")
+    df_u = carregar_dados("Uber")
+    df_n = carregar_dados("99Pop")
+    df_g = carregar_dados("Geral")
     df_cartoes = carregar_dados("MeusCartoes")
-    df_saldos = carregar_dados("Saldos")
     
-    # Garantir que Saldos existam
+    # Recarrega Saldos com prioridade
+    df_saldos = carregar_dados("Saldos")
     if df_saldos.empty:
         df_saldos = pd.DataFrame([
             {"Local": "Cédula", "Valor": 0.0, "ID": "1"},
@@ -83,26 +86,27 @@ if st.session_state.pagina == "Geral":
     c2.metric("Despesas em Caixa", f"R$ {despesas_caixa:.2f}")
     c3.metric("Lucro Líquido", f"R$ {lucro_liquido:.2f}")
 
-    # 2. SEÇÃO DE SALDOS (ONDE ESTÁ O DINHEIRO AGORA)
+    # 2. SEÇÃO DE SALDOS (CONFERÊNCIA)
     st.write("---")
-    st.subheader("💰 Conferência de Saldos (Total Acumulado)")
+    st.subheader("💰 Conferência de Saldos (Onde está o dinheiro)")
     cols_s = st.columns(4)
     for i, row in df_saldos.iterrows():
-        with cols_s[i]:
-            st.metric(row['Local'], f"R$ {row['Valor']:.2f}")
+        with cols_s[i % 4]:
+            st.metric(row['Local'], f"R$ {float(row['Valor']):.2f}")
     
-    with st.expander("Ajustar Saldos (Cédula, Bancos e Apps)"):
-        col_adj1, col_adj2 = st.columns(2)
-        with col_adj1:
-            local_sel = st.selectbox("Qual local deseja ajustar?", df_saldos['Local'].tolist())
-        with col_adj2:
-            novo_v = st.number_input("Novo Valor Total", min_value=0.0, step=10.0, format="%.2f")
-        if st.button("Salvar Ajuste de Saldo"):
-            df_saldos.loc[df_saldos['Local'] == local_sel, 'Valor'] = novo_v
-            conn.update(worksheet="Saldos", data=df_saldos)
-            st.cache_data.clear(); st.success("Saldo Atualizado!"); st.rerun()
+    # Form de ajuste de saldo (Fora de outro form para evitar conflito)
+    with st.expander("Ajustar Valores dos Saldos"):
+        with st.form("ajuste_saldos"):
+            local_sel = st.selectbox("Selecione o Local:", df_saldos['Local'].tolist())
+            novo_v = st.number_input("Digite o valor real atual:", min_value=0.0, step=0.01, format="%.2f")
+            if st.form_submit_button("Atualizar Saldo"):
+                df_saldos.loc[df_saldos['Local'] == local_sel, 'Valor'] = novo_v
+                conn.update(worksheet="Saldos", data=df_saldos)
+                st.cache_data.clear() # Limpa memória para carregar o novo valor
+                st.success(f"Saldo de {local_sel} atualizado!")
+                st.rerun()
 
-    # 3. LANÇAMENTO DE MOVIMENTAÇÕES
+    # 3. LANÇAMENTO GERAL
     st.write("---")
     col_f, col_e = st.columns([1, 2])
     with col_f:
@@ -129,13 +133,6 @@ if st.session_state.pagina == "Geral":
         st.subheader("Extrato Geral")
         if not df_g.empty:
             st.dataframe(df_g.drop(columns=['ID'], errors='ignore').tail(10), use_container_width=True)
-            with st.expander("Limpar Extrato Geral"):
-                it = df_g['Data'] + " - " + df_g['Descricao'] + " (R$ " + df_g['Valor'].astype(str) + ")"
-                sel_del = st.selectbox("Item para apagar:", it.tolist())
-                if st.button("Apagar Item"):
-                    id_d = df_g[it == sel_del]['ID'].values[0]
-                    conn.update(worksheet="Geral", data=df_g[df_g['ID'] != id_d])
-                    st.cache_data.clear(); st.rerun()
 
 # --- PÁGINA: CARTÃO DE CRÉDITO ---
 elif st.session_state.pagina == "Cartao":
@@ -173,10 +170,3 @@ elif st.session_state.pagina in ["Uber", "99 Pop"]:
                 conn.update(worksheet=aba, data=pd.concat([df_app, n], ignore_index=True)); st.cache_data.clear(); st.rerun()
     with c2: 
         st.dataframe(df_app.drop(columns=['ID'], errors='ignore').tail(10), use_container_width=True)
-        with st.expander(f"Limpar Extrato {aba}"):
-            it = df_app['Data'] + " - R$ " + df_app['Valor'].astype(str)
-            if st.button(f"Apagar Selecionado {aba}"):
-                sel = st.selectbox("Item:", it.tolist(), key=f"del_{aba}")
-                id_d = df_app[it == sel]['ID'].values[0]
-                conn.update(worksheet=aba, data=df_app[df_app['ID'] != id_d])
-                st.cache_data.clear(); st.rerun()
