@@ -24,7 +24,6 @@ def carregar_dados(nome_aba):
     try:
         df = conn.read(worksheet=nome_aba, ttl=0)
         if df is not None and not df.empty:
-            # Limpeza de dados para evitar erros de soma
             for col in ['Valor', 'Limite', 'Parcelas']:
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
@@ -34,10 +33,13 @@ def carregar_dados(nome_aba):
     except:
         return pd.DataFrame()
 
-# --- FUNÇÃO PARA COLORIR O EXTRATO ---
+# --- FUNÇÃO PARA COLORIR O EXTRATO (CORRIGIDA) ---
 def colorir_valor(row):
-    # Vermelho para Saída, Verde para Entrada
-    color = 'background-color: rgba(255, 75, 75, 0.2);' if row['Tipo'] == 'Saída' else 'background-color: rgba(0, 255, 0, 0.1);'
+    # Se a coluna 'Tipo' não existir na linha, assume que é Entrada (Verde)
+    if 'Tipo' in row.index:
+        color = 'background-color: rgba(255, 75, 75, 0.2);' if row['Tipo'] == 'Saída' else 'background-color: rgba(0, 255, 0, 0.1);'
+    else:
+        color = 'background-color: rgba(0, 255, 0, 0.1);' # Padrão verde para Uber/99
     return [color] * len(row)
 
 # --- MENU SUPERIOR ---
@@ -58,13 +60,9 @@ hoje_str = datetime.now().strftime("%d/%m/%Y")
 
 # --- PÁGINA: GERAL ---
 if st.session_state.pagina == "Geral":
-    df_u = carregar_dados("Uber")
-    df_n = carregar_dados("99Pop")
-    df_g = carregar_dados("Geral")
-    df_cartoes = carregar_dados("MeusCartoes")
-    df_saldos = carregar_dados("Saldos")
+    df_u = carregar_dados("Uber"); df_n = carregar_dados("99Pop"); df_g = carregar_dados("Geral")
+    df_cartoes = carregar_dados("MeusCartoes"); df_saldos = carregar_dados("Saldos")
     
-    # 1. SALDOS ACUMULADOS
     st.subheader("Saldos")
     if not df_saldos.empty:
         cols_s = st.columns(4)
@@ -74,34 +72,24 @@ if st.session_state.pagina == "Geral":
     
     with st.expander("Ajustar Saldos"):
         if not df_saldos.empty:
-            local_sel = st.selectbox("Local:", df_saldos['Local'].tolist())
-            novo_v = st.number_input("Novo Valor:", min_value=0.0, step=1.0)
+            l_sel = st.selectbox("Local:", df_saldos['Local'].tolist())
+            n_v = st.number_input("Novo Valor:", min_value=0.0)
             if st.button("Salvar Ajuste"):
-                df_saldos.loc[df_saldos['Local'] == local_sel, 'Valor'] = novo_v
+                df_saldos.loc[df_saldos['Local'] == l_sel, 'Valor'] = n_v
                 conn.update(worksheet="Saldos", data=df_saldos)
                 st.cache_data.clear(); st.rerun()
 
-    # 2. RESUMO DO DIA (Cálculo Corrigido)
     st.write("---")
-    # Ganhos Uber + 99 hoje
-    ganho_uber = df_u[df_u['Data'] == hoje_str]['Valor'].sum() if not df_u.empty else 0
-    ganho_99 = df_n[df_n['Data'] == hoje_str]['Valor'].sum() if not df_n.empty else 0
-    # Entradas manuais hoje
-    entradas_g = df_g[(df_g['Data'] == hoje_str) & (df_g['Tipo'] == "Entrada")]['Valor'].sum() if not df_g.empty else 0
-    
-    total_ganhos = ganho_uber + ganho_99 + entradas_g
-    
-    # Saídas hoje (ignorando cartão de crédito para não abater do lucro imediato)
-    total_saidas = df_g[(df_g['Data'] == hoje_str) & (df_g['Tipo'] == "Saída") & (df_g['Forma_Pagamento'] != "Cartão de Crédito")]['Valor'].sum() if not df_g.empty else 0
-    
-    lucro = total_ganhos - total_saidas
+    g_u = df_u[df_u['Data'] == hoje_str]['Valor'].sum() if not df_u.empty else 0
+    g_n = df_n[df_n['Data'] == hoje_str]['Valor'].sum() if not df_n.empty else 0
+    e_g = df_g[(df_g['Data'] == hoje_str) & (df_g['Tipo'] == "Entrada")]['Valor'].sum() if not df_g.empty else 0
+    s_g = df_g[(df_g['Data'] == hoje_str) & (df_g['Tipo'] == "Saída") & (df_g['Forma_Pagamento'] != "Cartão de Crédito")]['Valor'].sum() if not df_g.empty else 0
     
     c1, c2, c3 = st.columns(3)
-    c1.metric("Ganhos Hoje", f"R$ {total_ganhos:.2f}")
-    c2.metric("Saídas Hoje", f"R$ {total_saidas:.2f}")
-    c3.metric("Lucro Líquido", f"R$ {lucro:.2f}")
+    c1.metric("Ganhos Hoje", f"R$ {g_u + g_n + e_g:.2f}")
+    c2.metric("Saídas Hoje", f"R$ {s_g:.2f}")
+    c3.metric("Lucro Líquido", f"R$ {(g_u + g_n + e_g) - s_g:.2f}")
 
-    # 3. LANÇAMENTO
     st.write("---")
     col_f, col_e = st.columns([1, 2])
     with col_f:
@@ -110,23 +98,15 @@ if st.session_state.pagina == "Geral":
             tipo = st.selectbox("Tipo", ["Saída", "Entrada"])
             vlr = st.number_input("Valor", min_value=0.0)
             forma = st.selectbox("Pagamento", ["Dinheiro/PIX", "Débito", "Cartão de Crédito"])
-            c_sel = "N/A"; p_sel = 1
-            if forma == "Cartão de Crédito" and not df_cartoes.empty:
-                c_sel = st.selectbox("Qual Cartão?", df_cartoes['Nome'].tolist())
-                p_sel = st.number_input("Parcelas", min_value=1, step=1)
             desc = st.text_input("Descrição")
-            data_lanc = st.date_input("Data do Lançamento", datetime.now())
             if st.form_submit_button("Lançar"):
-                nova = pd.DataFrame([{"Data": data_lanc.strftime("%d/%m/%Y"), "Categoria": "Geral", "Descricao": desc, "Valor": float(vlr), "Tipo": tipo, "Forma_Pagamento": forma, "Cartao_Nome": c_sel, "Parcelas": p_sel, "ID": str(uuid.uuid4())[:8]}])
+                nova = pd.DataFrame([{"Data": hoje_str, "Categoria": "Geral", "Descricao": desc, "Valor": float(vlr), "Tipo": tipo, "Forma_Pagamento": forma, "ID": str(uuid.uuid4())[:8]}])
                 conn.update(worksheet="Geral", data=pd.concat([df_g, nova], ignore_index=True))
                 st.cache_data.clear(); st.rerun()
 
     with col_e:
-        st.subheader("Extrato Geral")
         if not df_g.empty:
-            # Ordena pelo mais recente e aplica cores
-            df_display = df_g.drop(columns=['ID'], errors='ignore').tail(15)
-            st.dataframe(df_display.style.apply(colorir_valor, axis=1), use_container_width=True)
+            st.dataframe(df_g.drop(columns=['ID'], errors='ignore').tail(15).style.apply(colorir_valor, axis=1), use_container_width=True)
 
 # --- PÁGINAS UBER / 99 ---
 elif st.session_state.pagina in ["Uber", "99 Pop"]:
@@ -137,15 +117,14 @@ elif st.session_state.pagina in ["Uber", "99 Pop"]:
     with c1:
         with st.form(f"f_{aba}", clear_on_submit=True):
             v = st.number_input("Valor", min_value=0.0); k = st.number_input("KM", min_value=0)
-            d_app = st.date_input("Data", datetime.now())
             if st.form_submit_button("Salvar"):
-                n = pd.DataFrame([{"Data": d_app.strftime("%d/%m/%Y"), "Valor": float(v), "Descricao": "", "KM_Rodado": k, "ID": str(uuid.uuid4())[:8]}])
+                n = pd.DataFrame([{"Data": hoje_str, "Valor": float(v), "KM_Rodado": k, "ID": str(uuid.uuid4())[:8]}])
                 conn.update(worksheet=aba, data=pd.concat([df_app, n], ignore_index=True))
                 st.cache_data.clear(); st.rerun()
     with c2: 
         if not df_app.empty:
-            df_app['Tipo'] = 'Entrada'
-            st.dataframe(df_app.drop(columns=['ID', 'Tipo'], errors='ignore').tail(10).style.apply(colorir_valor, axis=1), use_container_width=True)
+            # Aqui estava o erro: agora colorir_valor funciona mesmo sem a coluna 'Tipo'
+            st.dataframe(df_app.drop(columns=['ID'], errors='ignore').tail(15).style.apply(colorir_valor, axis=1), use_container_width=True)
 
 # --- PÁGINA: CARTÃO ---
 elif st.session_state.pagina == "Cartao":
@@ -160,10 +139,9 @@ elif st.session_state.pagina == "Cartao":
                 conn.update(worksheet="MeusCartoes", data=pd.concat([df_cartoes, nv], ignore_index=True))
                 st.cache_data.clear(); st.rerun()
         for _, r in df_cartoes.iterrows():
-            gasto = df_g[df_g['Cartao_Nome'] == r['Nome']]['Valor'].sum() if "Cartao_Nome" in df_g.columns else 0
-            st.info(f"**{r['Nome']}**\n\nDisp: R$ {r['Limite']-gasto:.2f} / Lim: R$ {r['Limite']:.2f}")
+            gasto = df_g[df_g['Cartao_Nome'] == r['Nome']]['Valor'].sum() if not df_g.empty and "Cartao_Nome" in df_g.columns else 0
+            st.info(f"**{r['Nome']}**\n\nDisp: R$ {r['Limite']-gasto:.2f}")
     with cb:
-        st.subheader("Extrato Cartão")
         if not df_g.empty and "Forma_Pagamento" in df_g.columns:
-            compras = df_g[df_g['Forma_Pagamento'] == "Cartão de Crédito"][['Data', 'Cartao_Nome', 'Valor', 'Parcelas', 'Tipo']]
+            compras = df_g[df_g['Forma_Pagamento'] == "Cartão de Crédito"]
             st.dataframe(compras.style.apply(colorir_valor, axis=1), use_container_width=True)
