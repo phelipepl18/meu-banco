@@ -22,6 +22,7 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 def carregar_dados(nome_aba):
     try:
         df = conn.read(worksheet=nome_aba, ttl=0)
+        # Força a conversão da coluna Valor para número logo na leitura
         if not df.empty and 'Valor' in df.columns:
             df['Valor'] = pd.to_numeric(df['Valor'], errors='coerce').fillna(0)
         if not df.empty and "ID" not in df.columns:
@@ -62,10 +63,18 @@ if st.session_state.pagina == "Geral":
     df_n = carregar_dados("99Pop")
     df_g = carregar_dados("Geral")
     
+    # Cálculos garantindo conversão numérica
     ganho_u = df_u[df_u['Data'] == hoje]['Valor'].sum() if not df_u.empty else 0
     ganho_n = df_n[df_n['Data'] == hoje]['Valor'].sum() if not df_n.empty else 0
-    total_entradas = ganho_u + ganho_n
+    
+    # Entradas da página Geral (Soma o que for 'Entrada')
+    entradas_geral = df_g[(df_g['Data'] == hoje) & (df_g['Tipo'] == "Entrada")]['Valor'].sum() if not df_g.empty else 0
+    
+    total_entradas = ganho_u + ganho_n + entradas_geral
+    
+    # Saídas da página Geral (Soma o que for 'Saída')
     total_saidas = df_g[(df_g['Data'] == hoje) & (df_g['Tipo'] == "Saída")]['Valor'].sum() if not df_g.empty else 0
+    
     lucro_liquido = total_entradas - total_saidas
 
     st.subheader(f"Resumo de Hoje: {hoje}")
@@ -82,25 +91,25 @@ if st.session_state.pagina == "Geral":
         with st.form("form_g", clear_on_submit=True):
             tipo = st.selectbox("Tipo", ["Saída", "Entrada"])
             cat = st.selectbox("Categoria", ["Combustível", "Alimentação", "Manutenção", "Outros"])
-            desc = st.text_input("Descricao (Opcional)") # <--- NOVO CAMPO ADICIONADO
-            vlr = st.number_input("Valor", min_value=0.0, step=0.01)
+            desc = st.text_input("Descricao (Opcional)")
+            vlr = st.number_input("Valor", min_value=0.0, step=0.01, format="%.2f")
             dat = st.date_input("Data", datetime.now())
             if st.form_submit_button("Registrar"):
                 nova = pd.DataFrame([{
                     "Data": dat.strftime("%d/%m/%Y"), 
                     "Categoria": cat, 
-                    "Descricao": desc, # <--- SALVANDO A DESCRIÇÃO
-                    "Valor": vlr, 
+                    "Descricao": desc, 
+                    "Valor": float(vlr), # Garante que salve como número flutuante
                     "Tipo": tipo, 
                     "ID": str(uuid.uuid4())[:8]
                 }])
-                conn.update(worksheet="Geral", data=pd.concat([df_g, nova], ignore_index=True))
+                df_final = pd.concat([df_g, nova], ignore_index=True)
+                conn.update(worksheet="Geral", data=df_final)
                 st.cache_data.clear()
                 st.rerun()
 
     with col_e:
         if not df_g.empty:
-            # Exibe a tabela incluindo a coluna Descricao
             st.dataframe(df_g.drop(columns=['ID']).tail(10), use_container_width=True)
             with st.expander("Apagar Lancamento (Geral)"):
                 opc = df_g['Data'] + " - " + df_g['Categoria'] + " (R$ " + df_g['Valor'].astype(str) + ")"
@@ -112,7 +121,7 @@ if st.session_state.pagina == "Geral":
                     st.cache_data.clear()
                     st.rerun()
 
-# --- PÁGINAS UBER E 99 POP ---
+# --- PÁGINAS UBER E 99 POP (Mantidas iguais) ---
 elif st.session_state.pagina in ["Uber", "99 Pop"]:
     aba = "Uber" if "Uber" in st.session_state.pagina else "99Pop"
     st.header(f"Ganhos {aba}")
@@ -125,7 +134,7 @@ elif st.session_state.pagina in ["Uber", "99 Pop"]:
             v = st.number_input("Valor Recebido", min_value=0.0, step=0.01)
             km = st.number_input("KM Rodado", min_value=0)
             if st.form_submit_button("Salvar"):
-                nova = pd.DataFrame([{"Data": d.strftime("%d/%m/%Y"), "Valor": v, "Descricao": "", "KM_Rodado": km, "ID": str(uuid.uuid4())[:8]}])
+                nova = pd.DataFrame([{"Data": d.strftime("%d/%m/%Y"), "Valor": float(v), "Descricao": "", "KM_Rodado": km, "ID": str(uuid.uuid4())[:8]}])
                 conn.update(worksheet=aba, data=pd.concat([df_app, nova], ignore_index=True))
                 st.cache_data.clear()
                 st.rerun()
@@ -142,7 +151,7 @@ elif st.session_state.pagina in ["Uber", "99 Pop"]:
                     st.cache_data.clear()
                     st.rerun()
 
-# --- PÁGINA: CARTAO DE CREDITO ---
+# --- PÁGINA: CARTAO DE CREDITO (Mantida igual) ---
 elif st.session_state.pagina == "Cartao":
     st.header("Gestao de Cartao de Credito")
     df_c = carregar_dados("Cartao")
@@ -154,7 +163,7 @@ elif st.session_state.pagina == "Cartao":
             valor_c = st.number_input("Valor da Compra", min_value=0.0, step=0.01)
             data_c = st.date_input("Data da Compra", datetime.now())
             if st.form_submit_button("Lancar Compra"):
-                nova = pd.DataFrame([{"Data": data_c.strftime("%d/%m/%Y"), "Cartao": nome_c, "Valor": valor_c, "ID": str(uuid.uuid4())[:8]}])
+                nova = pd.DataFrame([{"Data": data_c.strftime("%d/%m/%Y"), "Cartao": nome_c, "Valor": float(valor_c), "ID": str(uuid.uuid4())[:8]}])
                 conn.update(worksheet="Cartao", data=pd.concat([df_c, nova], ignore_index=True))
                 st.cache_data.clear()
                 st.rerun()
