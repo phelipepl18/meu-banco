@@ -2,6 +2,7 @@ import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 import pandas as pd
 from datetime import datetime
+import uuid # Para gerar IDs únicos
 
 # Configuração da Página
 st.set_page_config(page_title="Bank Pro Driver v3", layout="centered")
@@ -13,40 +14,22 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 def carregar_dados(nome_aba):
     try:
         df = conn.read(worksheet=nome_aba, ttl=0)
+        # Se a coluna ID não existir no que foi lido, a gente garante que o DF não quebre
+        if not df.empty and "ID" not in df.columns:
+            df["ID"] = [str(uuid.uuid4())[:8] for _ in range(len(df))]
         return df
     except Exception:
         if nome_aba == "Geral":
-            return pd.DataFrame(columns=["Data", "Categoria", "Descricao", "Valor", "Tipo"])
+            return pd.DataFrame(columns=["Data", "Categoria", "Descricao", "Valor", "Tipo", "ID"])
         else:
-            return pd.DataFrame(columns=["Data", "Valor", "Descricao", "KM_Rodado"])
+            return pd.DataFrame(columns=["Data", "Valor", "Descricao", "KM_Rodado", "ID"])
 
 # Menu Lateral
 st.sidebar.title("Painel do Motorista")
-meta = st.sidebar.number_input("Sua Meta Diária (R$)", min_value=0, value=250)
 pagina = st.sidebar.radio("Selecione:", ["Resumo do Dia", "Uber", "99 Pop", "Gastos Geral"])
 
-# --- PÁGINA: RESUMO DO DIA ---
-if pagina == "Resumo do Dia":
-    st.header("Resumo do Dia")
-    hoje = datetime.now().strftime("%d/%m/%Y")
-    
-    df_u = carregar_dados("Uber")
-    df_n = carregar_dados("99Pop")
-    df_g = carregar_dados("Geral")
-    
-    ganho_u = pd.to_numeric(df_u[df_u['Data'] == hoje]['Valor'], errors='coerce').sum() if not df_u.empty else 0
-    ganho_n = pd.to_numeric(df_n[df_n['Data'] == hoje]['Valor'], errors='coerce').sum() if not df_n.empty else 0
-    total_ganhos = ganho_u + ganho_n
-    
-    gastos_hoje = 0
-    if not df_g.empty and 'Tipo' in df_g.columns:
-        gastos_hoje = pd.to_numeric(df_g[(df_g['Data'] == hoje) & (df_g['Tipo'].str.contains("Saída", na=False))]['Valor'], errors='coerce').sum()
-    
-    lucro = total_ganhos - gastos_hoje
-    st.metric("Lucro Real Hoje", f"R$ {lucro:.2f}", f"Ganhos: R$ {total_ganhos:.2f}")
-
 # --- PÁGINA: GASTOS GERAL ---
-elif pagina == "Gastos Geral":
+if pagina == "Gastos Geral":
     st.header("Lançar Gastos")
     df_g = carregar_dados("Geral")
     
@@ -56,43 +39,49 @@ elif pagina == "Gastos Geral":
         vlr = st.number_input("Valor R$", min_value=0.0, step=0.01)
         dat = st.date_input("Data", datetime.now())
         
-        btn_salvar = st.form_submit_button("Salvar Gasto")
-
-        if btn_salvar:
-            # FORMATO DA DATA: DIA/MÊS/ANO
-            data_br = dat.strftime("%d/%m/%Y")
-            
+        if st.form_submit_button("Salvar Gasto"):
             nova_linha = pd.DataFrame([{
-                "Data": data_br, 
+                "Data": dat.strftime("%d/%m/%Y"), 
                 "Categoria": cat, 
                 "Descricao": "", 
                 "Valor": vlr, 
-                "Tipo": tipo
+                "Tipo": tipo,
+                "ID": str(uuid.uuid4())[:8] # Gera um ID curto
             }])
-            
             df_final = pd.concat([df_g, nova_linha], ignore_index=True)
-            
-            try:
-                conn.update(worksheet="Geral", data=df_final)
-                st.cache_data.clear()
-                st.success(f"Gravado com sucesso!")
-                st.rerun()
-            except Exception as e:
-                if "200" in str(e):
-                    st.cache_data.clear()
-                    st.rerun()
-                else:
-                    st.error(f"Erro: {e}")
-    
+            conn.update(worksheet="Geral", data=df_final)
+            st.cache_data.clear()
+            st.rerun()
+
     st.write("---")
     st.subheader("Extrato de Gastos")
-    df_exibir = carregar_dados("Geral")
-    if not df_exibir.empty:
-        st.dataframe(df_exibir.tail(10), use_container_width=True)
+    
+    if not df_g.empty:
+        # Criamos uma lista para o usuário escolher qual item apagar
+        # Mostra a Data e o Valor para o usuário identificar
+        df_g['Identificador'] = df_g['Data'] + " - " + df_g['Categoria'] + " (R$ " + df_g['Valor'].astype(str) + ")"
+        
+        item_para_deletar = st.selectbox("Selecione um item para apagar:", df_g['Identificador'].tolist())
+        
+        if st.button("🗑️ Apagar Item Selecionado"):
+            # Filtra o DataFrame mantendo tudo, exceto o item selecionado
+            # Usamos o ID para ter certeza de apagar a linha certa
+            id_para_remover = df_g[df_g['Identificador'] == item_para_deletar]['ID'].values[0]
+            df_atualizado = df_g[df_g['ID'] != id_para_remover]
+            
+            # Removemos a coluna temporária de identificação antes de salvar
+            df_atualizado = df_atualizado.drop(columns=['Identificador'])
+            
+            conn.update(worksheet="Geral", data=df_atualizado)
+            st.cache_data.clear()
+            st.success("Item removido! O saldo foi atualizado.")
+            st.rerun()
+            
+        st.dataframe(df_g.drop(columns=['ID', 'Identificador']).tail(10), use_container_width=True)
     else:
         st.warning("O extrato está vazio.")
 
-# --- PÁGINAS UBER E 99 ---
+# --- AJUSTE NAS PÁGINAS UBER / 99 ---
 elif pagina in ["Uber", "99 Pop"]:
     aba = "Uber" if "Uber" in pagina else "99Pop"
     st.header(f"Ganhos {aba}")
@@ -104,17 +93,25 @@ elif pagina in ["Uber", "99 Pop"]:
         km = st.number_input("KM Rodados", min_value=0)
         
         if st.form_submit_button(f"Salvar {aba}"):
-            # FORMATO DA DATA: DIA/MÊS/ANO
-            data_br = d.strftime("%d/%m/%Y")
-            nova = pd.DataFrame([{"Data": data_br, "Valor": v, "Descricao": "", "KM_Rodado": km}])
+            nova = pd.DataFrame([{
+                "Data": d.strftime("%d/%m/%Y"), 
+                "Valor": v, 
+                "Descricao": "", 
+                "KM_Rodado": km,
+                "ID": str(uuid.uuid4())[:8]
+            }])
             df_f = pd.concat([df_app, nova], ignore_index=True)
-            try:
-                conn.update(worksheet=aba, data=df_f)
-                st.cache_data.clear()
-                st.rerun()
-            except:
-                st.cache_data.clear()
-                st.rerun()
+            conn.update(worksheet=aba, data=df_f)
+            st.cache_data.clear()
+            st.rerun()
 
-    st.subheader("Últimas Corridas")
-    st.dataframe(df_app.tail(10), use_container_width=True)
+    if not df_app.empty:
+        st.write("---")
+        item_del = st.selectbox("Apagar lançamento:", df_app['Data'] + " (R$ " + df_app['Valor'].astype(str) + ")")
+        if st.button(f"Remover de {aba}"):
+            # Lógica similar de filtro
+            df_novo = df_app[~(df_app['Data'] + " (R$ " + df_app['Valor'].astype(str) + ")" == item_del)]
+            conn.update(worksheet=aba, data=df_novo)
+            st.cache_data.clear()
+            st.rerun()
+        st.dataframe(df_app.drop(columns=['ID']).tail(10))
