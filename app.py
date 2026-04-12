@@ -7,12 +7,13 @@ import uuid
 # Configuração da Página
 st.set_page_config(page_title="Bank Pro Driver", layout="wide")
 
-# Estilo CSS
+# Estilo CSS Personalizado
 st.markdown("""
     <style>
     [data-testid="stSidebar"] {display: none;}
     .main { background-color: #121212; }
     div[data-testid="stMetricValue"] { color: #00FF00; }
+    .stMetric { background-color: #1e1e1e; padding: 15px; border-radius: 10px; border: 1px solid #333; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -23,15 +24,15 @@ def carregar_dados(nome_aba):
     try:
         df = conn.read(worksheet=nome_aba, ttl=0)
         if not df.empty:
-            if 'Limite' in df.columns:
-                df['Limite'] = pd.to_numeric(df['Limite'], errors='coerce').fillna(0)
-            if 'Valor' in df.columns:
-                df['Valor'] = pd.to_numeric(df['Valor'], errors='coerce').fillna(0)
+            for col in ['Valor', 'Limite', 'Parcelas']:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
             if "ID" not in df.columns:
                 df["ID"] = [str(uuid.uuid4())[:8] for _ in range(len(df))]
         return df
     except:
         if nome_aba == "MeusCartoes": return pd.DataFrame(columns=["Nome", "Limite", "ID"])
+        if nome_aba == "Saldos": return pd.DataFrame(columns=["Local", "Valor", "ID"])
         if nome_aba == "Geral": return pd.DataFrame(columns=["Data", "Categoria", "Descricao", "Valor", "Tipo", "Forma_Pagamento", "Cartao_Nome", "Parcelas", "ID"])
         return pd.DataFrame(columns=["Data", "Valor", "Descricao", "KM_Rodado", "ID"])
 
@@ -54,95 +55,128 @@ if st.session_state.pagina == "Geral":
     hoje = datetime.now().strftime("%d/%m/%Y")
     df_u = carregar_dados("Uber"); df_n = carregar_dados("99Pop"); df_g = carregar_dados("Geral")
     df_cartoes = carregar_dados("MeusCartoes")
+    df_saldos = carregar_dados("Saldos")
     
-    # Cálculos: Só subtrai do lucro se NÃO for Cartão de Crédito
+    # Garantir que Saldos existam
+    if df_saldos.empty:
+        df_saldos = pd.DataFrame([
+            {"Local": "Cédula", "Valor": 0.0, "ID": "1"},
+            {"Local": "Banco Itaú", "Valor": 0.0, "ID": "2"},
+            {"Local": "App Uber", "Valor": 0.0, "ID": "3"},
+            {"Local": "App 99Pop", "Valor": 0.0, "ID": "4"}
+        ])
+
+    # 1. RESUMO FINANCEIRO DO DIA
+    st.subheader(f"Resumo de Hoje: {hoje}")
     ganho_total = (df_u[df_u['Data'] == hoje]['Valor'].sum() + 
                    df_n[df_n['Data'] == hoje]['Valor'].sum() + 
-                   df_g[(df_g['Data'] == hoje) & (df_g['Tipo'] == "Entrada")]['Valor'].sum())
+                   (df_g[(df_g['Data'] == hoje) & (df_g['Tipo'] == "Entrada")]['Valor'].sum() if "Tipo" in df_g.columns else 0))
     
-    # Despesas que saem do bolso hoje (Dinheiro/PIX/Débito)
-    despesas_caixa = df_g[(df_g['Data'] == hoje) & (df_g['Tipo'] == "Saída") & (df_g['Forma_Pagamento'] != "Cartão de Crédito")]['Valor'].sum()
+    despesas_caixa = 0
+    if "Forma_Pagamento" in df_g.columns and "Tipo" in df_g.columns:
+        despesas_caixa = df_g[(df_g['Data'] == hoje) & (df_g['Tipo'] == "Saída") & (df_g['Forma_Pagamento'] != "Cartão de Crédito")]['Valor'].sum()
+    
     lucro_liquido = ganho_total - despesas_caixa
-
-    st.subheader(f"Resumo de Hoje: {hoje}")
-    c1, c2, c3 = st.columns(3)
-    c1.metric("Ganhos Brutos", f"R$ {ganho_total:.2f}")
-    c2.metric("Despesas (Caixa)", f"R$ {despesas_caixa:.2f}")
-    c3.metric("Lucro Liquido", f"R$ {lucro_liquido:.2f}")
     
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Ganhos Brutos (Hoje)", f"R$ {ganho_total:.2f}")
+    c2.metric("Despesas em Caixa", f"R$ {despesas_caixa:.2f}")
+    c3.metric("Lucro Líquido", f"R$ {lucro_liquido:.2f}")
+
+    # 2. SEÇÃO DE SALDOS (ONDE ESTÁ O DINHEIRO AGORA)
+    st.write("---")
+    st.subheader("💰 Conferência de Saldos (Total Acumulado)")
+    cols_s = st.columns(4)
+    for i, row in df_saldos.iterrows():
+        with cols_s[i]:
+            st.metric(row['Local'], f"R$ {row['Valor']:.2f}")
+    
+    with st.expander("Ajustar Saldos (Cédula, Bancos e Apps)"):
+        col_adj1, col_adj2 = st.columns(2)
+        with col_adj1:
+            local_sel = st.selectbox("Qual local deseja ajustar?", df_saldos['Local'].tolist())
+        with col_adj2:
+            novo_v = st.number_input("Novo Valor Total", min_value=0.0, step=10.0, format="%.2f")
+        if st.button("Salvar Ajuste de Saldo"):
+            df_saldos.loc[df_saldos['Local'] == local_sel, 'Valor'] = novo_v
+            conn.update(worksheet="Saldos", data=df_saldos)
+            st.cache_data.clear(); st.success("Saldo Atualizado!"); st.rerun()
+
+    # 3. LANÇAMENTO DE MOVIMENTAÇÕES
     st.write("---")
     col_f, col_e = st.columns([1, 2])
     with col_f:
-        st.subheader("Lancamento")
+        st.subheader("Novo Lançamento")
         with st.form("form_g", clear_on_submit=True):
             tipo = st.selectbox("Tipo", ["Saída", "Entrada"])
-            cat = st.selectbox("Categoria", ["Combustível", "Alimentação", "Manutenção", "Outros"])
-            desc = st.text_input("Descricao")
+            cat = st.selectbox("Categoria", ["Combustível", "Alimentação", "Manutenção", "Lazer", "Outros"])
+            desc = st.text_input("Descrição")
             vlr = st.number_input("Valor", min_value=0.0, step=0.01)
             forma = st.selectbox("Forma de Pagamento", ["Dinheiro/PIX", "Débito", "Cartão de Crédito"])
             
-            cartao_sel = "N/A"; parc_sel = 1
+            c_sel = "N/A"; p_sel = 1
             if forma == "Cartão de Crédito" and not df_cartoes.empty:
-                cartao_sel = st.selectbox("Selecione o Cartão", df_cartoes['Nome'].tolist())
-                parc_sel = st.number_input("Parcelas", min_value=1, step=1)
+                c_sel = st.selectbox("Selecione o Cartão", df_cartoes['Nome'].tolist())
+                p_sel = st.number_input("Parcelas", min_value=1, step=1)
             
             dat = st.date_input("Data", datetime.now())
             if st.form_submit_button("Registrar"):
-                nova = pd.DataFrame([{"Data": dat.strftime("%d/%m/%Y"), "Categoria": cat, "Descricao": desc, "Valor": float(vlr), "Tipo": tipo, "Forma_Pagamento": forma, "Cartao_Nome": cartao_sel, "Parcelas": parc_sel, "ID": str(uuid.uuid4())[:8]}])
+                nova = pd.DataFrame([{"Data": dat.strftime("%d/%m/%Y"), "Categoria": cat, "Descricao": desc, "Valor": float(vlr), "Tipo": tipo, "Forma_Pagamento": forma, "Cartao_Nome": c_sel, "Parcelas": p_sel, "ID": str(uuid.uuid4())[:8]}])
                 conn.update(worksheet="Geral", data=pd.concat([df_g, nova], ignore_index=True))
                 st.cache_data.clear(); st.rerun()
 
     with col_e:
         st.subheader("Extrato Geral")
         if not df_g.empty:
-            st.dataframe(df_g.drop(columns=['ID']).tail(10), use_container_width=True)
+            st.dataframe(df_g.drop(columns=['ID'], errors='ignore').tail(10), use_container_width=True)
+            with st.expander("Limpar Extrato Geral"):
+                it = df_g['Data'] + " - " + df_g['Descricao'] + " (R$ " + df_g['Valor'].astype(str) + ")"
+                sel_del = st.selectbox("Item para apagar:", it.tolist())
+                if st.button("Apagar Item"):
+                    id_d = df_g[it == sel_del]['ID'].values[0]
+                    conn.update(worksheet="Geral", data=df_g[df_g['ID'] != id_d])
+                    st.cache_data.clear(); st.rerun()
 
-# --- PÁGINA: CARTAO DE CREDITO ---
+# --- PÁGINA: CARTÃO DE CRÉDITO ---
 elif st.session_state.pagina == "Cartao":
     st.header("Gerenciamento de Cartoes")
-    df_cartoes = carregar_dados("MeusCartoes")
-    df_g = carregar_dados("Geral") # Pega as compras feitas na página Geral
+    df_cartoes = carregar_dados("MeusCartoes"); df_g = carregar_dados("Geral")
     
     col_cad, col_ext = st.columns([1, 2])
     with col_cad:
-        st.subheader("Meus Cartoes")
-        with st.form("novo_cartao", clear_on_submit=True):
-            nome_c = st.text_input("Nome do Cartao"); limite_c = st.number_input("Limite (R$)", min_value=0.0)
-            if st.form_submit_button("Salvar Cartao"):
-                novo = pd.DataFrame([{"Nome": nome_c, "Limite": float(limite_c), "ID": str(uuid.uuid4())[:8]}])
-                conn.update(worksheet="MeusCartoes", data=pd.concat([df_cartoes, novo], ignore_index=True))
+        with st.form("n_c", clear_on_submit=True):
+            n = st.text_input("Nome do Cartao"); l = st.number_input("Limite", min_value=0.0)
+            if st.form_submit_button("Cadastrar"):
+                nv = pd.DataFrame([{"Nome": n, "Limite": float(l), "ID": str(uuid.uuid4())[:8]}])
+                conn.update(worksheet="MeusCartoes", data=pd.concat([df_cartoes, nv], ignore_index=True))
                 st.cache_data.clear(); st.rerun()
         
-        if not df_cartoes.empty:
-            for _, row in df_cartoes.iterrows():
-                # Calcula quanto ja usou desse cartao especifico na aba Geral
-                gasto_cartao = df_g[(df_g['Cartao_Nome'] == row['Nome'])]['Valor'].sum()
-                disponivel = row['Limite'] - gasto_cartao
-                st.info(f"**{row['Nome']}**\n\nLimite: R$ {row['Limite']:.2f}\n\nDisponível: R$ {disponivel:.2f}")
-
-            with st.expander("Excluir Cartao"):
-                c_del = st.selectbox("Remover:", df_cartoes['Nome'].tolist())
-                if st.button("Confirmar Exclusão"):
-                    conn.update(worksheet="MeusCartoes", data=df_cartoes[df_cartoes['Nome'] != c_del])
-                    st.cache_data.clear(); st.rerun()
+        for _, row in df_cartoes.iterrows():
+            gasto = df_g[df_g['Cartao_Nome'] == row['Nome']]['Valor'].sum() if "Cartao_Nome" in df_g.columns else 0
+            st.info(f"**{row['Nome']}**\n\nDisponível: R$ {row['Limite'] - gasto:.2f} / Limite: R$ {row['Limite']:.2f}")
 
     with col_ext:
-        st.subheader("Extrato de Compras no Cartao")
-        compras_cartao = df_g[df_g['Forma_Pagamento'] == "Cartão de Crédito"]
-        if not compras_cartao.empty:
-            st.dataframe(compras_cartao[['Data', 'Cartao_Nome', 'Descricao', 'Valor', 'Parcelas']], use_container_width=True)
-        else:
-            st.write("Nenhuma compra realizada no cartão ainda.")
+        st.subheader("Extrato do Cartão")
+        if "Forma_Pagamento" in df_g.columns:
+            st.dataframe(df_g[df_g['Forma_Pagamento'] == "Cartão de Crédito"][['Data', 'Cartao_Nome', 'Descricao', 'Valor', 'Parcelas']], use_container_width=True)
 
-# --- PÁGINAS UBER / 99 (MANTIDAS) ---
+# --- PÁGINAS UBER / 99 ---
 elif st.session_state.pagina in ["Uber", "99 Pop"]:
     aba = "Uber" if "Uber" in st.session_state.pagina else "99Pop"
     st.header(f"Ganhos {aba}"); df_app = carregar_dados(aba)
     c1, c2 = st.columns([1, 2])
     with c1:
         with st.form(f"f_{aba}", clear_on_submit=True):
-            d = st.date_input("Data", datetime.now()); v = st.number_input("Valor", min_value=0.0)
+            d = st.date_input("Data", datetime.now()); v = st.number_input("Valor", min_value=0.0); k = st.number_input("KM", min_value=0)
             if st.form_submit_button("Salvar"):
-                n = pd.DataFrame([{"Data": d.strftime("%d/%m/%Y"), "Valor": float(v), "ID": str(uuid.uuid4())[:8]}])
+                n = pd.DataFrame([{"Data": d.strftime("%d/%m/%Y"), "Valor": float(v), "Descricao": "", "KM_Rodado": k, "ID": str(uuid.uuid4())[:8]}])
                 conn.update(worksheet=aba, data=pd.concat([df_app, n], ignore_index=True)); st.cache_data.clear(); st.rerun()
-    with c2: st.dataframe(df_app.drop(columns=['ID']).tail(10), use_container_width=True)
+    with c2: 
+        st.dataframe(df_app.drop(columns=['ID'], errors='ignore').tail(10), use_container_width=True)
+        with st.expander(f"Limpar Extrato {aba}"):
+            it = df_app['Data'] + " - R$ " + df_app['Valor'].astype(str)
+            if st.button(f"Apagar Selecionado {aba}"):
+                sel = st.selectbox("Item:", it.tolist(), key=f"del_{aba}")
+                id_d = df_app[it == sel]['ID'].values[0]
+                conn.update(worksheet=aba, data=df_app[df_app['ID'] != id_d])
+                st.cache_data.clear(); st.rerun()
