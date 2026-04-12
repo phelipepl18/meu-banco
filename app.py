@@ -27,8 +27,49 @@ st.sidebar.title("🚕 Painel do Motorista")
 pagina = st.sidebar.radio("Selecione:", ["Resumo do Dia", "Uber 🚗", "99 Pop 🚙", "Gastos Geral ⛽"])
 
 # --- PÁGINA: GASTOS GERAL ⛽ ---
-if pagina == "Gastos Geral ⛽":
+elif pagina == "Gastos Geral ⛽":
     st.header("⛽ Lançar Gastos")
+    df_g = carregar_dados("Geral")
+    
+    with st.form("form_gastos", clear_on_submit=True):
+        tipo = st.selectbox("Tipo", ["Saída 📉", "Entrada 📈"])
+        cat = st.selectbox("Categoria", ["Combustível ⛽", "Alimentação 🍕", "Manutenção 🔧", "Outros"])
+        vlr = st.number_input("Valor R$", min_value=0.0, step=0.01)
+        dat = st.date_input("Data", datetime.now())
+        
+        btn_salvar = st.form_submit_button("Salvar Gasto")
+
+        if btn_salvar:
+            data_br = dat.strftime("%d/%m/%Y")
+            nova_linha = pd.DataFrame([{
+                "Data": data_br, 
+                "Categoria": cat, 
+                "Descricao": "", 
+                "Valor": vlr, 
+                "Tipo": tipo
+            }])
+            
+            df_final = pd.concat([df_g, nova_linha], ignore_index=True)
+            
+            try:
+                conn.update(worksheet="Geral", data=df_final)
+                st.cache_data.clear()
+                st.success("✅ Gravado com sucesso!")
+                st.rerun()
+            except Exception as e:
+                if "200" in str(e):
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                    st.error(f"Erro: {e}")
+    
+    st.write("---")
+    st.subheader("📋 Extrato de Gastos")
+    df_exibir = carregar_dados("Geral")
+    if not df_exibir.empty:
+        st.dataframe(df_exibir.tail(10), use_container_width=True)
+    else:
+        st.warning("O extrato ainda está vazio no Google Sheets.")
     
     # Carregamos os dados atuais
     df_g = carregar_dados("Geral")
