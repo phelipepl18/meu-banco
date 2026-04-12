@@ -22,7 +22,6 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 def carregar_dados(nome_aba):
     try:
         df = conn.read(worksheet=nome_aba, ttl=0)
-        # Força a conversão da coluna Valor para número logo na leitura
         if not df.empty and 'Valor' in df.columns:
             df['Valor'] = pd.to_numeric(df['Valor'], errors='coerce').fillna(0)
         if not df.empty and "ID" not in df.columns:
@@ -32,7 +31,7 @@ def carregar_dados(nome_aba):
         if nome_aba == "Geral":
             return pd.DataFrame(columns=["Data", "Categoria", "Descricao", "Valor", "Tipo", "ID"])
         elif nome_aba == "Cartao":
-            return pd.DataFrame(columns=["Data", "Cartao", "Valor", "ID"])
+            return pd.DataFrame(columns=["Data", "Cartao", "Valor", "Parcelas", "ID"])
         else:
             return pd.DataFrame(columns=["Data", "Valor", "Descricao", "KM_Rodado", "ID"])
 
@@ -63,18 +62,11 @@ if st.session_state.pagina == "Geral":
     df_n = carregar_dados("99Pop")
     df_g = carregar_dados("Geral")
     
-    # Cálculos garantindo conversão numérica
     ganho_u = df_u[df_u['Data'] == hoje]['Valor'].sum() if not df_u.empty else 0
     ganho_n = df_n[df_n['Data'] == hoje]['Valor'].sum() if not df_n.empty else 0
-    
-    # Entradas da página Geral (Soma o que for 'Entrada')
     entradas_geral = df_g[(df_g['Data'] == hoje) & (df_g['Tipo'] == "Entrada")]['Valor'].sum() if not df_g.empty else 0
-    
     total_entradas = ganho_u + ganho_n + entradas_geral
-    
-    # Saídas da página Geral (Soma o que for 'Saída')
     total_saidas = df_g[(df_g['Data'] == hoje) & (df_g['Tipo'] == "Saída")]['Valor'].sum() if not df_g.empty else 0
-    
     lucro_liquido = total_entradas - total_saidas
 
     st.subheader(f"Resumo de Hoje: {hoje}")
@@ -95,16 +87,8 @@ if st.session_state.pagina == "Geral":
             vlr = st.number_input("Valor", min_value=0.0, step=0.01, format="%.2f")
             dat = st.date_input("Data", datetime.now())
             if st.form_submit_button("Registrar"):
-                nova = pd.DataFrame([{
-                    "Data": dat.strftime("%d/%m/%Y"), 
-                    "Categoria": cat, 
-                    "Descricao": desc, 
-                    "Valor": float(vlr), # Garante que salve como número flutuante
-                    "Tipo": tipo, 
-                    "ID": str(uuid.uuid4())[:8]
-                }])
-                df_final = pd.concat([df_g, nova], ignore_index=True)
-                conn.update(worksheet="Geral", data=df_final)
+                nova = pd.DataFrame([{"Data": dat.strftime("%d/%m/%Y"), "Categoria": cat, "Descricao": desc, "Valor": float(vlr), "Tipo": tipo, "ID": str(uuid.uuid4())[:8]}])
+                conn.update(worksheet="Geral", data=pd.concat([df_g, nova], ignore_index=True))
                 st.cache_data.clear()
                 st.rerun()
 
@@ -121,7 +105,7 @@ if st.session_state.pagina == "Geral":
                     st.cache_data.clear()
                     st.rerun()
 
-# --- PÁGINAS UBER E 99 POP (Mantidas iguais) ---
+# --- PÁGINAS UBER E 99 POP ---
 elif st.session_state.pagina in ["Uber", "99 Pop"]:
     aba = "Uber" if "Uber" in st.session_state.pagina else "99Pop"
     st.header(f"Ganhos {aba}")
@@ -151,26 +135,41 @@ elif st.session_state.pagina in ["Uber", "99 Pop"]:
                     st.cache_data.clear()
                     st.rerun()
 
-# --- PÁGINA: CARTAO DE CREDITO (Mantida igual) ---
+# --- PÁGINA: CARTAO DE CREDITO (ATUALIZADA) ---
 elif st.session_state.pagina == "Cartao":
     st.header("Gestao de Cartao de Credito")
     df_c = carregar_dados("Cartao")
+    
+    # Campo para Limite (salvo apenas na sessão para não alterar planilha principal)
+    limite_total = st.number_input("Definir Limite Total do Cartao (R$)", min_value=0.0, value=1000.0, step=100.0)
     
     col_c1, col_c2 = st.columns([1, 2])
     with col_c1:
         with st.form("form_cartao", clear_on_submit=True):
             nome_c = st.text_input("Nome do Cartao (ex: Nubank)")
-            valor_c = st.number_input("Valor da Compra", min_value=0.0, step=0.01)
+            valor_c = st.number_input("Valor Total da Compra", min_value=0.0, step=0.01)
+            parcelas = st.number_input("Quantidade de Parcelas", min_value=1, value=1, step=1)
             data_c = st.date_input("Data da Compra", datetime.now())
             if st.form_submit_button("Lancar Compra"):
-                nova = pd.DataFrame([{"Data": data_c.strftime("%d/%m/%Y"), "Cartao": nome_c, "Valor": float(valor_c), "ID": str(uuid.uuid4())[:8]}])
+                nova = pd.DataFrame([{
+                    "Data": data_c.strftime("%d/%m/%Y"), 
+                    "Cartao": nome_c, 
+                    "Valor": float(valor_c), 
+                    "Parcelas": int(parcelas),
+                    "ID": str(uuid.uuid4())[:8]
+                }])
                 conn.update(worksheet="Cartao", data=pd.concat([df_c, nova], ignore_index=True))
                 st.cache_data.clear()
                 st.rerun()
     with col_c2:
         if not df_c.empty:
             total_fatura = df_c['Valor'].sum()
-            st.metric("Total em Compras no Cartao", f"R$ {total_fatura:.2f}")
+            limite_disponivel = limite_total - total_fatura
+            
+            mc1, mc2 = st.columns(2)
+            mc1.metric("Total Utilizado", f"R$ {total_fatura:.2f}")
+            mc2.metric("Limite Disponivel", f"R$ {limite_disponivel:.2f}")
+            
             st.dataframe(df_c.drop(columns=['ID']).tail(10), use_container_width=True)
             with st.expander("Apagar Compra no Cartao"):
                 opc_c = df_c['Data'] + " - " + df_c['Cartao'] + " (R$ " + df_c['Valor'].astype(str) + ")"
