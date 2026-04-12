@@ -22,7 +22,6 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 def carregar_dados(nome_aba):
     try:
         df = conn.read(worksheet=nome_aba, ttl=0)
-        # Garante que as colunas numéricas sejam tratadas como números
         if not df.empty and 'Valor' in df.columns:
             df['Valor'] = pd.to_numeric(df['Valor'], errors='coerce').fillna(0)
         if not df.empty and "ID" not in df.columns:
@@ -63,7 +62,6 @@ if st.session_state.pagina == "Geral":
     df_n = carregar_dados("99Pop")
     df_g = carregar_dados("Geral")
     
-    # Cálculos de hoje para o resumo
     ganho_u = df_u[df_u['Data'] == hoje]['Valor'].sum() if not df_u.empty else 0
     ganho_n = df_n[df_n['Data'] == hoje]['Valor'].sum() if not df_n.empty else 0
     total_entradas = ganho_u + ganho_n
@@ -84,16 +82,25 @@ if st.session_state.pagina == "Geral":
         with st.form("form_g", clear_on_submit=True):
             tipo = st.selectbox("Tipo", ["Saída", "Entrada"])
             cat = st.selectbox("Categoria", ["Combustível", "Alimentação", "Manutenção", "Outros"])
+            desc = st.text_input("Descricao (Opcional)") # <--- NOVO CAMPO ADICIONADO
             vlr = st.number_input("Valor", min_value=0.0, step=0.01)
             dat = st.date_input("Data", datetime.now())
             if st.form_submit_button("Registrar"):
-                nova = pd.DataFrame([{"Data": dat.strftime("%d/%m/%Y"), "Categoria": cat, "Valor": vlr, "Tipo": tipo, "Descricao": "", "ID": str(uuid.uuid4())[:8]}])
+                nova = pd.DataFrame([{
+                    "Data": dat.strftime("%d/%m/%Y"), 
+                    "Categoria": cat, 
+                    "Descricao": desc, # <--- SALVANDO A DESCRIÇÃO
+                    "Valor": vlr, 
+                    "Tipo": tipo, 
+                    "ID": str(uuid.uuid4())[:8]
+                }])
                 conn.update(worksheet="Geral", data=pd.concat([df_g, nova], ignore_index=True))
                 st.cache_data.clear()
                 st.rerun()
 
     with col_e:
         if not df_g.empty:
+            # Exibe a tabela incluindo a coluna Descricao
             st.dataframe(df_g.drop(columns=['ID']).tail(10), use_container_width=True)
             with st.expander("Apagar Lancamento (Geral)"):
                 opc = df_g['Data'] + " - " + df_g['Categoria'] + " (R$ " + df_g['Valor'].astype(str) + ")"
