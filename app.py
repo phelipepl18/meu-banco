@@ -33,13 +33,16 @@ def carregar_dados(nome_aba):
     except:
         return pd.DataFrame()
 
-# --- FUNÇÃO PARA COLORIR O EXTRATO (CORRIGIDA) ---
+# --- FUNÇÃO PARA FORMATAR MOEDA BRASIL (R$ 2.550,00) ---
+def formatar_br(valor):
+    return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+
+# --- FUNÇÃO PARA COLORIR O EXTRATO ---
 def colorir_valor(row):
-    # Se a coluna 'Tipo' não existir na linha, assume que é Entrada (Verde)
     if 'Tipo' in row.index:
         color = 'background-color: rgba(255, 75, 75, 0.2);' if row['Tipo'] == 'Saída' else 'background-color: rgba(0, 255, 0, 0.1);'
     else:
-        color = 'background-color: rgba(0, 255, 0, 0.1);' # Padrão verde para Uber/99
+        color = 'background-color: rgba(0, 255, 0, 0.1);'
     return [color] * len(row)
 
 # --- MENU SUPERIOR ---
@@ -68,12 +71,12 @@ if st.session_state.pagina == "Geral":
         cols_s = st.columns(4)
         for i, row in df_saldos.iterrows():
             with cols_s[i % 4]:
-                st.metric(row['Local'], f"R$ {float(row['Valor']):.2f}")
+                st.metric(row['Local'], formatar_br(float(row['Valor'])))
     
     with st.expander("Ajustar Saldos"):
         if not df_saldos.empty:
             l_sel = st.selectbox("Local:", df_saldos['Local'].tolist())
-            n_v = st.number_input("Novo Valor:", min_value=0.0)
+            n_v = st.number_input("Novo Valor:", min_value=0.0, step=0.01, format="%.2f")
             if st.button("Salvar Ajuste"):
                 df_saldos.loc[df_saldos['Local'] == l_sel, 'Valor'] = n_v
                 conn.update(worksheet="Saldos", data=df_saldos)
@@ -86,9 +89,9 @@ if st.session_state.pagina == "Geral":
     s_g = df_g[(df_g['Data'] == hoje_str) & (df_g['Tipo'] == "Saída") & (df_g['Forma_Pagamento'] != "Cartão de Crédito")]['Valor'].sum() if not df_g.empty else 0
     
     c1, c2, c3 = st.columns(3)
-    c1.metric("Ganhos Hoje", f"R$ {g_u + g_n + e_g:.2f}")
-    c2.metric("Saídas Hoje", f"R$ {s_g:.2f}")
-    c3.metric("Lucro Líquido", f"R$ {(g_u + g_n + e_g) - s_g:.2f}")
+    c1.metric("Ganhos Hoje", formatar_br(g_u + g_n + e_g))
+    c2.metric("Saídas Hoje", formatar_br(s_g))
+    c3.metric("Lucro Líquido", formatar_br((g_u + g_n + e_g) - s_g))
 
     st.write("---")
     col_f, col_e = st.columns([1, 2])
@@ -96,7 +99,7 @@ if st.session_state.pagina == "Geral":
         st.subheader("Lançamento")
         with st.form("form_g", clear_on_submit=True):
             tipo = st.selectbox("Tipo", ["Saída", "Entrada"])
-            vlr = st.number_input("Valor", min_value=0.0)
+            vlr = st.number_input("Valor", min_value=0.0, step=0.01, format="%.2f")
             forma = st.selectbox("Pagamento", ["Dinheiro/PIX", "Débito", "Cartão de Crédito"])
             desc = st.text_input("Descrição")
             if st.form_submit_button("Lançar"):
@@ -116,31 +119,35 @@ elif st.session_state.pagina in ["Uber", "99 Pop"]:
     c1, c2 = st.columns([1, 2])
     with c1:
         with st.form(f"f_{aba}", clear_on_submit=True):
-            v = st.number_input("Valor", min_value=0.0); k = st.number_input("KM", min_value=0)
+            v = st.number_input("Valor", min_value=0.0, step=0.01, format="%.2f")
+            k = st.number_input("KM", min_value=0)
             if st.form_submit_button("Salvar"):
                 n = pd.DataFrame([{"Data": hoje_str, "Valor": float(v), "KM_Rodado": k, "ID": str(uuid.uuid4())[:8]}])
                 conn.update(worksheet=aba, data=pd.concat([df_app, n], ignore_index=True))
                 st.cache_data.clear(); st.rerun()
     with c2: 
         if not df_app.empty:
-            # Aqui estava o erro: agora colorir_valor funciona mesmo sem a coluna 'Tipo'
             st.dataframe(df_app.drop(columns=['ID'], errors='ignore').tail(15).style.apply(colorir_valor, axis=1), use_container_width=True)
 
-# --- PÁGINA: CARTÃO ---
+# --- PÁGINA: CARTÃO (Ajustada para valores altos) ---
 elif st.session_state.pagina == "Cartao":
     st.header("Cartão")
     df_cartoes = carregar_dados("MeusCartoes"); df_g = carregar_dados("Geral")
     ca, cb = st.columns([1, 2])
     with ca:
         with st.form("f_c"):
-            nc = st.text_input("Nome Cartão"); lc = st.number_input("Limite")
+            nc = st.text_input("Nome Cartão")
+            # Ajustado para permitir 2.550,00 e formatos grandes
+            lc = st.number_input("Limite", min_value=0.0, step=50.0, format="%.2f")
             if st.form_submit_button("Adicionar"):
                 nv = pd.DataFrame([{"Nome": nc, "Limite": float(lc), "ID": str(uuid.uuid4())[:8]}])
                 conn.update(worksheet="MeusCartoes", data=pd.concat([df_cartoes, nv], ignore_index=True))
                 st.cache_data.clear(); st.rerun()
+        
         for _, r in df_cartoes.iterrows():
             gasto = df_g[df_g['Cartao_Nome'] == r['Nome']]['Valor'].sum() if not df_g.empty and "Cartao_Nome" in df_g.columns else 0
-            st.info(f"**{r['Nome']}**\n\nDisp: R$ {r['Limite']-gasto:.2f}")
+            disp = r['Limite'] - gasto
+            st.info(f"**{r['Nome']}**\n\nDisponível: {formatar_br(disp)}")
     with cb:
         if not df_g.empty and "Forma_Pagamento" in df_g.columns:
             compras = df_g[df_g['Forma_Pagamento'] == "Cartão de Crédito"]
