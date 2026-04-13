@@ -23,6 +23,7 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 def carregar_dados(nome_aba):
     try:
+        # Remove espaços do nome da aba para evitar erro de leitura
         df = conn.read(worksheet=nome_aba.strip(), ttl=0)
         if df is not None and not df.empty:
             for col in ['Valor', 'Limite', 'Parcelas']:
@@ -70,12 +71,10 @@ if st.session_state.pagina == "Geral":
     if not df_saldos.empty:
         cols_s = st.columns(4)
         for i, row in df_saldos.iterrows():
-            local = row['Local']
+            local = str(row['Local']).strip() # Limpa espaços do nome
             saldo_inicial = float(row['Valor'])
             
-            # Calcula movimentações no Geral para este local
-            # Se o pagamento foi 'Dinheiro/PIX' e o local é 'Cédula', ou 'Itaú' e local 'Itaú', etc.
-            # Vamos padronizar: o nome do Pagamento deve ser igual ao nome do Local no Saldo
+            # Soma entradas e saídas no Geral filtrando por esse Local
             entradas = df_g[(df_g['Forma_Pagamento'] == local) & (df_g['Tipo'] == "Entrada")]['Valor'].sum()
             saidas = df_g[(df_g['Forma_Pagamento'] == local) & (df_g['Tipo'] == "Saída")]['Valor'].sum()
             
@@ -84,16 +83,17 @@ if st.session_state.pagina == "Geral":
             with cols_s[i % 4]:
                 st.metric(local, formatar_br(saldo_atual))
     
-    # AJUSTE DE SALDO INICIAL
+    # --- DEFINIR SALDO INICIAL ---
     with st.expander("📝 Definir Saldo Inicial"):
         if not df_saldos.empty:
             with st.form("form_ajuste_saldos"):
-                local_para_ajuste = st.selectbox("Selecione o Local:", df_saldos['Local'].tolist())
-                novo_valor_saldo = st.number_input("Valor Inicial na Mão:", min_value=0.0, step=0.01, format="%.2f")
+                local_sel = st.selectbox("Selecione o Local:", df_saldos['Local'].tolist())
+                valor_novo = st.number_input("Valor que você tem agora (R$):", min_value=0.0, step=0.01, format="%.2f")
                 if st.form_submit_button("Salvar Saldo Inicial"):
-                    df_saldos.loc[df_saldos['Local'] == local_para_ajuste, 'Valor'] = novo_valor_saldo
+                    # Atualiza o valor na tabela de Saldos
+                    df_saldos.loc[df_saldos['Local'] == local_sel, 'Valor'] = valor_novo
                     conn.update(worksheet="Saldos", data=df_saldos)
-                    st.cache_data.clear(); st.success("Saldo inicial salvo!"); st.rerun()
+                    st.cache_data.clear(); st.success("Saldo atualizado!"); st.rerun()
 
     # RESUMO DO DIA
     st.write("---")
@@ -110,30 +110,49 @@ if st.session_state.pagina == "Geral":
     # NOVO LANÇAMENTO
     st.write("---")
     st.subheader("📝 Novo Lançamento")
-    with st.form("form_geral_vFinal", clear_on_submit=True):
-        valor_input = st.number_input("VALOR (R$)", min_value=0.0, step=0.01, format="%.2f")
+    with st.form("form_geral", clear_on_submit=True):
+        v_in = st.number_input("VALOR (R$)", min_value=0.0, step=0.01, format="%.2f")
         col1, col2 = st.columns(2)
         with col1:
-            tipo_input = st.selectbox("TIPO", ["Saída", "Entrada"])
-            # OPÇÕES DE PAGAMENTO ATUALIZADAS
-            # DICA: O nome aqui deve ser igual ao nome cadastrado na aba "Saldos" para subtrair automático
-            forma_input = st.selectbox("PAGAMENTO", ["Cédula", "Itaú", "Uber", "99Pop", "Débito", "Cartão de Crédito"])
+            t_in = st.selectbox("TIPO", ["Saída", "Entrada"])
+            f_in = st.selectbox("PAGAMENTO", ["Cédula", "Itaú", "Uber", "99Pop", "Débito", "Cartão de Crédito"])
         with col2:
-            desc_input = st.text_input("DESCRIÇÃO")
-            cartao_nome = "N/A"
-            if forma_input == "Cartão de Crédito" and not df_cartoes.empty:
-                cartao_nome = st.selectbox("QUAL CARTÃO?", df_cartoes['Nome'].tolist())
+            d_in = st.text_input("DESCRIÇÃO")
+            c_nome = "N/A"
+            if f_in == "Cartão de Crédito" and not df_cartoes.empty:
+                c_nome = st.selectbox("QUAL CARTÃO?", df_cartoes['Nome'].tolist())
         
         if st.form_submit_button("LANÇAR AGORA", use_container_width=True):
-            if valor_input > 0:
-                nova_data = pd.DataFrame([{"Data": hoje_str, "Categoria": "Geral", "Descricao": desc_input, "Valor": float(valor_input), "Tipo": tipo_input, "Forma_Pagamento": forma_input, "Cartao_Nome": cartao_nome, "ID": str(uuid.uuid4())[:8]}])
-                conn.update(worksheet="Geral", data=pd.concat([df_g, nova_data], ignore_index=True))
-                st.cache_data.clear(); st.success("Lançamento processado!"); st.rerun()
+            if v_in > 0:
+                nova_d = pd.DataFrame([{"Data": hoje_str, "Categoria": "Geral", "Descricao": d_in, "Valor": float(v_in), "Tipo": t_in, "Forma_Pagamento": f_in, "Cartao_Nome": c_nome, "ID": str(uuid.uuid4())[:8]}])
+                conn.update(worksheet="Geral", data=pd.concat([df_g, nova_d], ignore_index=True))
+                st.cache_data.clear(); st.success("Lançado!"); st.rerun()
 
     # EXTRATO
-    st.write("---")
     if not df_g.empty:
-        df_ordenado = df_g.iloc[::-1] 
-        st.dataframe(df_ordenado.drop(columns=['ID'], errors='ignore').style.apply(colorir_valor, axis=1), use_container_width=True)
+        st.dataframe(df_g.iloc[::-1].drop(columns=['ID'], errors='ignore').style.apply(colorir_valor, axis=1), use_container_width=True)
 
-# ... (Páginas Uber e 99Pop seguem iguais ao código anterior)
+# --- PÁGINAS UBER / 99POP ---
+elif st.session_state.pagina == "Uber":
+    st.header("Uber")
+    df_app = carregar_dados("Uber")
+    with st.form("f_uber", clear_on_submit=True):
+        v = st.number_input("Valor", min_value=0.0, step=0.01, format="%.2f")
+        k = st.number_input("KM", min_value=0)
+        if st.form_submit_button("Salvar"):
+            n = pd.DataFrame([{"Data": hoje_str, "Valor": float(v), "KM_Rodado": k, "ID": str(uuid.uuid4())[:8]}])
+            conn.update(worksheet="Uber", data=pd.concat([df_app, n], ignore_index=True))
+            st.cache_data.clear(); st.rerun()
+    st.dataframe(df_app.iloc[::-1], use_container_width=True)
+
+elif st.session_state.pagina == "99Pop":
+    st.header("99Pop")
+    df_app = carregar_dados("99Pop")
+    with st.form("f_99", clear_on_submit=True):
+        v = st.number_input("Valor", min_value=0.0, step=0.01, format="%.2f")
+        k = st.number_input("KM", min_value=0)
+        if st.form_submit_button("Salvar"):
+            n = pd.DataFrame([{"Data": hoje_str, "Valor": float(v), "KM_Rodado": k, "ID": str(uuid.uuid4())[:8]}])
+            conn.update(worksheet="99Pop", data=pd.concat([df_app, n], ignore_index=True))
+            st.cache_data.clear(); st.rerun()
+    st.dataframe(df_app.iloc[::-1], use_container_width=True)
