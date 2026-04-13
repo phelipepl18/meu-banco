@@ -22,6 +22,7 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 
 def carregar_dados(nome_aba):
     try:
+        # Tira espaços extras do nome da aba para evitar erros
         df = conn.read(worksheet=nome_aba.strip(), ttl=0)
         if df is not None and not df.empty:
             for col in ['Valor', 'Limite', 'Parcelas']:
@@ -33,8 +34,9 @@ def carregar_dados(nome_aba):
     except:
         return pd.DataFrame()
 
-# --- FUNÇÃO PARA FORMATAR MOEDA BRASIL ---
+# --- FUNÇÃO PARA FORMATAR MOEDA BRASIL (2.550,00) ---
 def formatar_br(valor):
+    # Transforma 2550.0 em "R$ 2.550,00"
     return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
 def colorir_valor(row):
@@ -44,7 +46,7 @@ def colorir_valor(row):
         color = 'background-color: rgba(0, 255, 0, 0.1);'
     return [color] * len(row)
 
-# --- MENU SUPERIOR ---
+# --- MENU SUPERIOR (Nomes padronizados) ---
 st.title("Pro Driver")
 m1, m2, m3, m4 = st.columns(4)
 with m1: btn_geral = st.button("Geral", use_container_width=True)
@@ -55,7 +57,7 @@ with m4: btn_cartao = st.button("Cartao", use_container_width=True)
 if 'pagina' not in st.session_state: st.session_state.pagina = "Geral"
 if btn_geral: st.session_state.pagina = "Geral"
 if btn_uber: st.session_state.pagina = "Uber"
-if btn_99: st.session_state.pagina = "99Pop"
+if btn_99: st.session_state.pagina = "99Pop" # Removi o espaço aqui
 if btn_cartao: st.session_state.pagina = "Cartao"
 
 hoje_str = datetime.now().strftime("%d/%m/%Y")
@@ -68,7 +70,6 @@ if st.session_state.pagina == "Geral":
     df_saldos = carregar_dados("Saldos")
     df_cartoes = carregar_dados("MeusCartoes")
     
-    # 1. SALDOS
     st.subheader("Saldos")
     if not df_saldos.empty:
         cols_s = st.columns(4)
@@ -76,7 +77,7 @@ if st.session_state.pagina == "Geral":
             with cols_s[i % 4]:
                 st.metric(row['Local'], formatar_br(float(row['Valor'])))
     
-    # 2. RESUMO DO DIA
+    # RESUMO DO DIA
     st.write("---")
     g_u = df_u[df_u['Data'] == hoje_str]['Valor'].sum() if not df_u.empty else 0
     g_n = df_n[df_n['Data'] == hoje_str]['Valor'].sum() if not df_n.empty else 0
@@ -88,89 +89,54 @@ if st.session_state.pagina == "Geral":
     c2.metric("Saídas Hoje", formatar_br(s_g))
     c3.metric("Lucro Líquido", formatar_br((g_u + g_n + e_g) - s_g))
 
-    # 3. LANÇAMENTO (CORRIGIDO)
     st.write("---")
-    st.subheader("Novo Lançamento")
-    
-    with st.form("form_lancamento_geral", clear_on_submit=True):
-        col_form1, col_form2 = st.columns(2)
-        
-        with col_form1:
-            tipo_mov = st.selectbox("Tipo de Movimentação", ["Saída", "Entrada"])
-            # Campo de valor corrigido para aceitar decimais e números altos
-            valor_mov = st.number_input("Valor (R$)", min_value=0.0, step=0.01, format="%.2f")
-            forma_pag = st.selectbox("Forma de Pagamento", ["Dinheiro/PIX", "Débito", "Cartão de Crédito"])
-            
-        with col_form2:
-            desc_mov = st.text_input("Descrição / Detalhes")
-            cartao_sel = "N/A"
-            if forma_pag == "Cartão de Crédito" and not df_cartoes.empty:
-                cartao_sel = st.selectbox("Selecione o Cartão", df_cartoes['Nome'].tolist())
-            
-        submit = st.form_submit_button("Confirmar Lançamento", use_container_width=True)
-        
-        if submit:
-            nova_linha = pd.DataFrame([{
-                "Data": hoje_str,
-                "Categoria": "Geral",
-                "Descricao": desc_mov,
-                "Valor": float(valor_mov),
-                "Tipo": tipo_mov,
-                "Forma_Pagamento": forma_pag,
-                "Cartao_Nome": cartao_sel,
-                "ID": str(uuid.uuid4())[:8]
-            }])
-            df_atualizado = pd.concat([df_g, nova_linha], ignore_index=True)
-            conn.update(worksheet="Geral", data=df_atualizado)
-            st.cache_data.clear()
-            st.success("Lançamento realizado com sucesso!")
-            st.rerun()
+    col_f, col_e = st.columns([1, 2])
+    with col_f:
+        with st.form("form_g", clear_on_submit=True):
+            t = st.selectbox("Tipo", ["Saída", "Entrada"])
+            v = st.number_input("Valor", min_value=0.0, step=0.01, format="%.2f")
+            f = st.selectbox("Pagamento", ["Dinheiro/PIX", "Débito", "Cartão de Crédito"])
+            d = st.text_input("Descrição")
+            if st.form_submit_button("Lançar"):
+                nova = pd.DataFrame([{"Data": hoje_str, "Categoria": "Geral", "Descricao": d, "Valor": float(v), "Tipo": t, "Forma_Pagamento": f, "ID": str(uuid.uuid4())[:8]}])
+                conn.update(worksheet="Geral", data=pd.concat([df_g, nova], ignore_index=True))
+                st.cache_data.clear(); st.rerun()
+    with col_e:
+        if not df_g.empty:
+            st.dataframe(df_g.drop(columns=['ID'], errors='ignore').tail(15).style.apply(colorir_valor, axis=1), use_container_width=True)
 
-    # 4. EXTRATO
-    st.write("---")
-    st.subheader("Últimos Lançamentos")
-    if not df_g.empty:
-        st.dataframe(
-            df_g.drop(columns=['ID'], errors='ignore').tail(10).style.apply(colorir_valor, axis=1),
-            use_container_width=True
-        )
+# --- PÁGINAS UBER / 99 ---
+elif st.session_state.pagina in ["Uber", "99Pop"]:
+    aba = st.session_state.pagina
+    st.header(aba)
+    df_app = carregar_dados(aba)
+    c1, c2 = st.columns([1, 2])
+    with c1:
+        with st.form(f"f_{aba}", clear_on_submit=True):
+            v_in = st.number_input("Valor", min_value=0.0, step=0.01, format="%.2f")
+            k_in = st.number_input("KM", min_value=0)
+            if st.form_submit_button("Salvar"):
+                n_row = pd.DataFrame([{"Data": hoje_str, "Valor": float(v_in), "KM_Rodado": k_in, "ID": str(uuid.uuid4())[:8]}])
+                conn.update(worksheet=aba, data=pd.concat([df_app, n_row], ignore_index=True))
+                st.cache_data.clear(); st.rerun()
+    with c2: 
+        if not df_app.empty:
+            st.dataframe(df_app.drop(columns=['ID'], errors='ignore').tail(15).style.apply(colorir_valor, axis=1), use_container_width=True)
 
-# --- PÁGINAS UBER / 99 / CARTAO (Mantidas as correções anteriores) ---
-elif st.session_state.pagina == "Uber":
-    st.header("Uber")
-    df_app = carregar_dados("Uber")
-    with st.form("f_uber", clear_on_submit=True):
-        v = st.number_input("Valor Bruto", min_value=0.0, step=0.01, format="%.2f")
-        k = st.number_input("KM Rodado", min_value=0)
-        if st.form_submit_button("Salvar Ganhos"):
-            n = pd.DataFrame([{"Data": hoje_str, "Valor": float(v), "KM_Rodado": k, "ID": str(uuid.uuid4())[:8]}])
-            conn.update(worksheet="Uber", data=pd.concat([df_app, n], ignore_index=True))
-            st.cache_data.clear(); st.rerun()
-    st.dataframe(df_app.tail(10), use_container_width=True)
-
-elif st.session_state.pagina == "99Pop":
-    st.header("99Pop")
-    df_app = carregar_dados("99Pop")
-    with st.form("f_99", clear_on_submit=True):
-        v = st.number_input("Valor Bruto", min_value=0.0, step=0.01, format="%.2f")
-        k = st.number_input("KM Rodado", min_value=0)
-        if st.form_submit_button("Salvar Ganhos"):
-            n = pd.DataFrame([{"Data": hoje_str, "Valor": float(v), "KM_Rodado": k, "ID": str(uuid.uuid4())[:8]}])
-            conn.update(worksheet="99Pop", data=pd.concat([df_app, n], ignore_index=True))
-            st.cache_data.clear(); st.rerun()
-    st.dataframe(df_app.tail(10), use_container_width=True)
-
+# --- PÁGINA: CARTÃO ---
 elif st.session_state.pagina == "Cartao":
-    st.header("Cartões")
+    st.header("Cartão")
     df_cartoes = carregar_dados("MeusCartoes")
     df_g = carregar_dados("Geral")
-    with st.form("f_cartao"):
-        nome_c = st.text_input("Nome do Cartão")
-        limite_c = st.number_input("Limite Total", min_value=0.0, step=0.01, format="%.2f")
-        if st.form_submit_button("Cadastrar Cartão"):
-            novo_c = pd.DataFrame([{"Nome": nome_c, "Limite": float(limite_c), "ID": str(uuid.uuid4())[:8]}])
-            conn.update(worksheet="MeusCartoes", data=pd.concat([df_cartoes, novo_c], ignore_index=True))
-            st.cache_data.clear(); st.rerun()
-    for _, r in df_cartoes.iterrows():
-        gasto = df_g[df_g['Cartao_Nome'] == r['Nome']]['Valor'].sum() if not df_g.empty and "Cartao_Nome" in df_g.columns else 0
-        st.info(f"**{r['Nome']}** | Disponível: {formatar_br(r['Limite'] - gasto)}")
+    ca, cb = st.columns([1, 2])
+    with ca:
+        with st.form("f_c"):
+            nc = st.text_input("Nome Cartão")
+            lc = st.number_input("Limite", min_value=0.0, step=0.01, format="%.2f")
+            if st.form_submit_button("Adicionar"):
+                nv = pd.DataFrame([{"Nome": nc, "Limite": float(lc), "ID": str(uuid.uuid4())[:8]}])
+                conn.update(worksheet="MeusCartoes", data=pd.concat([df_cartoes, nv], ignore_index=True))
+                st.cache_data.clear(); st.rerun()
+        for _, r in df_cartoes.iterrows():
+            gasto = df_g[df_g['Cartao_Nome'] == r['Nome']]['Valor'].sum() if not df_g.empty and "Cartao_Nome" in df_g.columns else 0
+            st.info(f"**{r['Nome']}**\n\nDisp: {formatar_br(r['Limite']-gasto)}")
