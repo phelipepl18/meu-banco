@@ -67,14 +67,28 @@ if st.session_state.pagina == "Geral":
     df_u = carregar_dados("Uber"); df_n = carregar_dados("99Pop"); df_g = carregar_dados("Geral")
     df_saldos = carregar_dados("Saldos"); df_cartoes = carregar_dados("MeusCartoes")
     
-    st.subheader("Saldos")
+    # --- SEÇÃO DE SALDOS (BALÕES) ---
+    st.subheader("💰 Meus Saldos Atualizados")
     if not df_saldos.empty:
         cols_s = st.columns(4)
         for i, row in df_saldos.iterrows():
             with cols_s[i % 4]:
                 st.metric(row['Local'], formatar_br(float(row['Valor'])))
     
-    # Resumo do Dia
+    # --- FORMULÁRIO PARA ALTERAR OS SALDOS (A OPÇÃO QUE TINHA SAÍDO) ---
+    with st.expander("📝 Alterar Valores dos Saldos"):
+        if not df_saldos.empty:
+            with st.form("form_ajuste_saldos"):
+                local_para_ajuste = st.selectbox("Selecione qual deseja alterar:", df_saldos['Local'].tolist())
+                novo_valor_saldo = st.number_input("Digite o novo valor total:", min_value=0.0, step=0.01, format="%.2f")
+                if st.form_submit_button("Atualizar Saldo Agora"):
+                    df_saldos.loc[df_saldos['Local'] == local_para_ajuste, 'Valor'] = novo_valor_saldo
+                    conn.update(worksheet="Saldos", data=df_saldos)
+                    st.cache_data.clear()
+                    st.success(f"Saldo de {local_para_ajuste} atualizado!")
+                    st.rerun()
+
+    # --- RESUMO DO DIA ---
     st.write("---")
     g_u = df_u[df_u['Data'] == hoje_str]['Valor'].sum() if not df_u.empty else 0
     g_n = df_n[df_n['Data'] == hoje_str]['Valor'].sum() if not df_n.empty else 0
@@ -86,8 +100,9 @@ if st.session_state.pagina == "Geral":
     c2.metric("Saídas Hoje", formatar_br(s_g))
     c3.metric("Lucro Líquido", formatar_br((g_u + g_n + e_g) - s_g))
 
+    # --- NOVO LANÇAMENTO GERAL ---
     st.write("---")
-    st.subheader("📝 Novo Lançamento")
+    st.subheader("📝 Novo Lançamento de Despesa/Entrada")
     with st.form("form_geral_vFinal", clear_on_submit=True):
         valor_input = st.number_input("VALOR (R$)", min_value=0.0, step=0.01, format="%.2f")
         col1, col2 = st.columns(2)
@@ -109,7 +124,7 @@ if st.session_state.pagina == "Geral":
     if not df_g.empty:
         st.dataframe(df_g.drop(columns=['ID'], errors='ignore').tail(10).style.apply(colorir_valor, axis=1), use_container_width=True)
 
-# --- PÁGINAS UBER / 99POP ---
+# --- PÁGINAS UBER / 99POP / CARTÃO (MESMA LÓGICA) ---
 elif st.session_state.pagina in ["Uber", "99Pop"]:
     aba = st.session_state.pagina
     st.header(aba)
@@ -124,7 +139,6 @@ elif st.session_state.pagina in ["Uber", "99Pop"]:
     if not df_app.empty:
         st.dataframe(df_app.tail(10).style.apply(colorir_valor, axis=1), use_container_width=True)
 
-# --- PÁGINA: CARTÃO ---
 elif st.session_state.pagina == "Cartao":
     st.header("Cartões")
     df_cartoes = carregar_dados("MeusCartoes"); df_g = carregar_dados("Geral")
