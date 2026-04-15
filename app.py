@@ -23,12 +23,15 @@ def carregar_dados(nome_aba):
     try:
         df = conn.read(worksheet=nome_aba.strip(), ttl=0)
         if df is not None and not df.empty:
+            # Padroniza nomes das colunas (remove espaços e deixa primeira letra maiúscula)
+            df.columns = [c.strip() for c in df.columns]
             for col in ['Valor', 'Limite', 'KM_Rodado']:
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
             if "ID" not in df.columns:
                 df["ID"] = [str(uuid.uuid4())[:8] for _ in range(len(df))]
-        return df if df is not None else pd.DataFrame()
+            return df
+        return pd.DataFrame()
     except:
         return pd.DataFrame()
 
@@ -55,13 +58,14 @@ df_g = carregar_dados("Geral")
 df_saldos = carregar_dados("Saldos")
 df_cartoes = carregar_dados("MeusCartoes")
 
-# Garantir colunas essenciais
-for col in ["Cartao_Vinculado", "Categoria", "Forma_Pagamento"]:
+# Proteção contra colunas ausentes
+for col in ["Cartao_Vinculado", "Categoria", "Forma_Pagamento", "Tipo", "Valor"]:
     if not df_g.empty and col not in df_g.columns:
-        df_g[col] = "N/A"
+        df_g[col] = "N/A" if col not in ["Valor"] else 0
 
 # --- PÁGINA GERAL ---
 if st.session_state.pagina == "Geral":
+    # BALÕES DE SALDO (Dinâmicos)
     lucro_total = 0
     if not df_saldos.empty:
         cols_s = st.columns(len(df_saldos))
@@ -74,8 +78,8 @@ if st.session_state.pagina == "Geral":
             cols_s[i].metric(local, formatar_br(saldo))
     
     st.metric("💰 LUCRO LÍQUIDO TOTAL", formatar_br(lucro_total))
+    
     st.write("---")
-
     col_l, col_a = st.columns([2, 1])
     with col_l:
         with st.form("form_novo", clear_on_submit=True):
@@ -87,9 +91,9 @@ if st.session_state.pagina == "Geral":
                 t = st.selectbox("TIPO", ["Saída", "Entrada"])
             with c2:
                 cat = st.selectbox("CATEGORIA", ["Combustível", "Manutenção", "Alimentação", "Aluguel Carro", "Seguro", "Limpeza", "Outros"])
-                cartao_escolhido = "N/A"
-                if f == "Cartão de Crédito" and not df_cartoes.empty:
-                    cartao_escolhido = st.selectbox("QUAL CARTÃO?", df_cartoes['Nome'].tolist())
+                cartao_list = df_cartoes['Nome'].tolist() if not df_cartoes.empty and 'Nome' in df_cartoes.columns else []
+                cartao_escolhido = st.selectbox("QUAL CARTÃO?", ["N/A"] + cartao_list) if f == "Cartão de Crédito" else "N/A"
+            
             d = st.text_input("DESCRIÇÃO")
             if st.form_submit_button("LANÇAR AGORA"):
                 if v > 0:
@@ -97,71 +101,63 @@ if st.session_state.pagina == "Geral":
                     conn.update(worksheet="Geral", data=pd.concat([df_g, nova], ignore_index=True))
                     st.cache_data.clear(); st.rerun()
 
-    st.write("---")
+    with col_a:
+        with st.expander("⚙️ SOMAR AO SALDO"):
+            if not df_saldos.empty:
+                sel = st.selectbox("Balão", df_saldos['Local'].tolist())
+                add = st.number_input("Valor Extra", min_value=0.0)
+                if st.button("Somar"):
+                    df_saldos.loc[df_saldos['Local'] == sel, 'Valor'] += add
+                    conn.update(worksheet="Saldos", data=df_saldos)
+                    st.cache_data.clear(); st.rerun()
+
     st.subheader("📊 Extrato Geral")
     if not df_g.empty:
         st.dataframe(df_g.iloc[::-1].drop(columns=['ID'], errors='ignore'), use_container_width=True)
 
-# --- PÁGINA RELATÓRIOS (CORRIGIDA) ---
+# --- PÁGINA RELATÓRIOS (FILTROS SOLICITADOS) ---
 elif st.session_state.pagina == "Relatorios":
-    st.header("📊 Resumo de Gastos Reais")
+    st.header("📊 Gastos do Mês")
     if not df_g.empty:
         df_g['Data_DT'] = pd.to_datetime(df_g['Data'], dayfirst=True, errors='coerce')
+        # FILTRO: Apenas Saídas, Mês atual e IGNORA Uber/99Pop no gráfico
+        df_saidas = df_g[(df_g['Tipo'] == 'Saída') & (df_g['Data_DT'].dt.month == hoje.month)].copy()
+        df_grafico = df_saidas[~df_saidas['Forma_Pagamento'].isin(["Uber", "99Pop"])].copy()
         
-        # FILTRO CRÍTICO: 
-        # 1. Apenas Saídas
-        # 2. Apenas do mês atual
-        # 3. IGNORA Uber e 99Pop no gráfico de gastos
-        locais_ignorar = ["Uber", "99Pop"]
-        df_saidas = df_g[
-            (df_g['Tipo'] == 'Saída') & 
-            (df_g['Data_DT'].dt.month == hoje.month) & 
-            (~df_g['Forma_Pagamento'].isin(locais_ignorar))
-        ].copy()
-        
-        if not df_saidas.empty:
-            # Lógica para "Outros" usar a descrição no gráfico
-            df_saidas['Exibir_No_Grafico'] = df_saidas.apply(
-                lambda x: x['Descricao'] if x['Categoria'] == 'Outros' else x['Categoria'], axis=1
-            )
-            
-            fig = px.pie(df_saidas, values='Valor', names='Exibir_No_Grafico', hole=.4, template="plotly_dark")
+        if not df_grafico.empty:
+            # Se for 'Outros', usa a Descrição
+            df_grafico['Label'] = df_grafico.apply(lambda x: x['Descricao'] if x['Categoria'] == 'Outros' else x['Categoria'], axis=1)
+            fig = px.pie(df_grafico, values='Valor', names='Label', hole=.4, template="plotly_dark")
             st.plotly_chart(fig, use_container_width=True)
-            
-            st.metric("Total de Gastos Reais (Excluindo Apps)", formatar_br(df_saidas['Valor'].sum()))
-            st.write("### Detalhes dos Gastos")
-            st.dataframe(df_saidas[['Data', 'Descricao', 'Forma_Pagamento', 'Valor']], use_container_width=True)
+            st.metric("Total Gastos Reais", formatar_br(df_grafico['Valor'].sum()))
         else:
-            st.warning("Nenhum gasto (saída) registrado fora dos apps de corrida este mês.")
-    else:
-        st.info("Sem dados para exibir.")
+            st.warning("Sem gastos fora de Uber/99Pop este mês.")
 
-# --- OUTRAS PÁGINAS (UBER, 99, CARTÃO) ---
+# --- PÁGINAS UBER / 99 / CARTÃO ---
 elif st.session_state.pagina in ["Uber", "99Pop"]:
     aba = st.session_state.pagina
     st.header(f"Registros {aba}")
     df_app = carregar_dados(aba)
     with st.form(f"f_{aba}"):
-        v_app = st.number_input("Valor Ganho", min_value=0.0)
-        k_app = st.number_input("KM Total do Dia", min_value=0)
-        if st.form_submit_button("Salvar Dia"):
+        v_app = st.number_input("Valor Ganho", min_value=0.0); k_app = st.number_input("KM", min_value=0)
+        if st.form_submit_button("Salvar"):
             nova_l = pd.DataFrame([{"Data": hoje.strftime("%d/%m/%Y"), "Valor": v_app, "KM_Rodado": k_app, "ID": str(uuid.uuid4())[:8]}])
             conn.update(worksheet=aba, data=pd.concat([df_app, nova_l], ignore_index=True))
             st.cache_data.clear(); st.rerun()
-    st.dataframe(df_app.iloc[::-1], use_container_width=True)
+    st.dataframe(df_app, use_container_width=True)
 
 elif st.session_state.pagina == "Cartao":
-    st.header("💳 Cartões de Crédito")
-    with st.expander("➕ Adicionar Cartão"):
-        with st.form("add_c"):
-            n_c = st.text_input("Nome")
-            l_c = st.number_input("Limite", min_value=0.0)
-            if st.form_submit_button("Salvar"):
-                n_df = pd.DataFrame([{"Nome": n_c, "Limite": l_c, "ID": str(uuid.uuid4())[:8]}])
-                conn.update(worksheet="MeusCartoes", data=pd.concat([df_cartoes, n_df], ignore_index=True))
-                st.cache_data.clear(); st.rerun()
-    if not df_cartoes.empty:
+    st.header("💳 Cartões")
+    if not df_cartoes.empty and 'Nome' in df_cartoes.columns:
+        cols_c = st.columns(len(df_cartoes))
         for i, r in df_cartoes.iterrows():
-            # Gastos vinculados ao cartão no Geral
-            g = df_g[(df_g['Cartao_Vinculado'] == r['Nome']) & (df_g['Tipo'] == 'Saída')]['Valor'].sum()
-            st.metric(r['Nome'], formatar_br(r['Limite'] - g), delta=f"Gasto: {formatar_br(g)}")
+            g = df_g[(df_g['Cartao_Vinculado'] == r['Nome']) & (df_g['Tipo'] == 'Saída')]['Valor'].sum() if not df_g.empty else 0
+            cols_c[i].metric(r['Nome'], formatar_br(r['Limite'] - g), delta=f"Gasto: {formatar_br(g)}")
+    
+    with st.expander("➕ Novo Cartão"):
+        with st.form("nc"):
+            n = st.text_input("Nome"); l = st.number_input("Limite")
+            if st.form_submit_button("Criar"):
+                nuevo = pd.DataFrame([{"Nome": n, "Limite": l, "ID": str(uuid.uuid4())[:8]}])
+                conn.update(worksheet="MeusCartoes", data=pd.concat([df_cartoes, nuevo], ignore_index=True))
+                st.cache_data.clear(); st.rerun()
