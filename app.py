@@ -5,7 +5,7 @@ from datetime import datetime
 import uuid
 import plotly.express as px
 
-st.set_page_config(page_title="Pro Driver - Gestão", layout="wide")
+st.set_page_config(page_title="Pro Driver - Oficial", layout="wide")
 
 # --- ESTILO ---
 st.markdown("""
@@ -23,13 +23,10 @@ def carregar_dados(nome_aba):
     try:
         df = conn.read(worksheet=nome_aba.strip(), ttl=0)
         if df is not None and not df.empty:
-            # Padroniza nomes das colunas (remove espaços e deixa primeira letra maiúscula)
             df.columns = [c.strip() for c in df.columns]
             for col in ['Valor', 'Limite', 'KM_Rodado']:
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-            if "ID" not in df.columns:
-                df["ID"] = [str(uuid.uuid4())[:8] for _ in range(len(df))]
             return df
         return pd.DataFrame()
     except:
@@ -38,9 +35,10 @@ def carregar_dados(nome_aba):
 def formatar_br(valor):
     return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-# --- NAVEGAÇÃO ---
+# --- ESTADO DA PÁGINA ---
 if 'pagina' not in st.session_state: st.session_state.pagina = "Geral"
 
+# --- NAVEGAÇÃO ---
 m1, m2, m3, m4, m5 = st.columns(5)
 with m1: 
     if st.button("🏠 Geral", use_container_width=True): st.session_state.pagina = "Geral"
@@ -58,14 +56,15 @@ df_g = carregar_dados("Geral")
 df_saldos = carregar_dados("Saldos")
 df_cartoes = carregar_dados("MeusCartoes")
 
-# Proteção contra colunas ausentes
-for col in ["Cartao_Vinculado", "Categoria", "Forma_Pagamento", "Tipo", "Valor"]:
-    if not df_g.empty and col not in df_g.columns:
-        df_g[col] = "N/A" if col not in ["Valor"] else 0
+# Criar colunas se estiverem vazias (Reset)
+for col in ["Data", "Descricao", "Valor", "Tipo", "Forma_Pagamento", "Categoria", "Cartao_Vinculado"]:
+    if df_g.empty:
+        df_g = pd.DataFrame(columns=["Data", "Descricao", "Valor", "Tipo", "Forma_Pagamento", "Categoria", "Cartao_Vinculado", "ID"])
+    elif col not in df_g.columns:
+        df_g[col] = "N/A"
 
-# --- PÁGINA GERAL ---
+# --- LÓGICA GERAL ---
 if st.session_state.pagina == "Geral":
-    # BALÕES DE SALDO (Dinâmicos)
     lucro_total = 0
     if not df_saldos.empty:
         cols_s = st.columns(len(df_saldos))
@@ -73,13 +72,17 @@ if st.session_state.pagina == "Geral":
             local = str(row['Local']).strip()
             v_base = float(row['Valor'])
             movs = df_g[df_g['Forma_Pagamento'] == local] if not df_g.empty else pd.DataFrame()
-            saldo = v_base + movs[movs['Tipo'] == "Entrada"]['Valor'].sum() - movs[movs['Tipo'] == "Saída"]['Valor'].sum()
+            
+            ent = movs[movs['Tipo'] == "Entrada"]['Valor'].sum() if not movs.empty else 0
+            sai = movs[movs['Tipo'] == "Saída"]['Valor'].sum() if not movs.empty else 0
+            
+            saldo = v_base + ent - sai
             lucro_total += saldo
             cols_s[i].metric(local, formatar_br(saldo))
     
     st.metric("💰 LUCRO LÍQUIDO TOTAL", formatar_br(lucro_total))
-    
     st.write("---")
+
     col_l, col_a = st.columns([2, 1])
     with col_l:
         with st.form("form_novo", clear_on_submit=True):
@@ -95,64 +98,62 @@ if st.session_state.pagina == "Geral":
                 cartao_escolhido = st.selectbox("QUAL CARTÃO?", ["N/A"] + cartao_list) if f == "Cartão de Crédito" else "N/A"
             
             d = st.text_input("DESCRIÇÃO")
-            if st.form_submit_button("LANÇAR AGORA"):
+            if st.form_submit_button("LANÇAR"):
                 if v > 0:
                     nova = pd.DataFrame([{"Data": hoje.strftime("%d/%m/%Y"), "Descricao": d, "Valor": v, "Tipo": t, "Forma_Pagamento": f, "Categoria": cat, "Cartao_Vinculado": cartao_escolhido, "ID": str(uuid.uuid4())[:8]}])
                     conn.update(worksheet="Geral", data=pd.concat([df_g, nova], ignore_index=True))
                     st.cache_data.clear(); st.rerun()
 
     with col_a:
-        with st.expander("⚙️ SOMAR AO SALDO"):
+        with st.expander("⚙️ AJUSTE INICIAL"):
             if not df_saldos.empty:
                 sel = st.selectbox("Balão", df_saldos['Local'].tolist())
-                add = st.number_input("Valor Extra", min_value=0.0)
-                if st.button("Somar"):
+                add = st.number_input("Valor", min_value=0.0)
+                if st.button("Confirmar"):
                     df_saldos.loc[df_saldos['Local'] == sel, 'Valor'] += add
                     conn.update(worksheet="Saldos", data=df_saldos)
                     st.cache_data.clear(); st.rerun()
 
-    st.subheader("📊 Extrato Geral")
+    st.subheader("📊 Extrato")
     if not df_g.empty:
         st.dataframe(df_g.iloc[::-1].drop(columns=['ID'], errors='ignore'), use_container_width=True)
 
-# --- PÁGINA RELATÓRIOS (FILTROS SOLICITADOS) ---
+# --- RELATÓRIOS ---
 elif st.session_state.pagina == "Relatorios":
-    st.header("📊 Gastos do Mês")
+    st.header("📊 Resumo de Gastos")
     if not df_g.empty:
         df_g['Data_DT'] = pd.to_datetime(df_g['Data'], dayfirst=True, errors='coerce')
-        # FILTRO: Apenas Saídas, Mês atual e IGNORA Uber/99Pop no gráfico
         df_saidas = df_g[(df_g['Tipo'] == 'Saída') & (df_g['Data_DT'].dt.month == hoje.month)].copy()
+        # Filtro: Ignora Uber e 99 no gráfico de gastos
         df_grafico = df_saidas[~df_saidas['Forma_Pagamento'].isin(["Uber", "99Pop"])].copy()
         
         if not df_grafico.empty:
-            # Se for 'Outros', usa a Descrição
             df_grafico['Label'] = df_grafico.apply(lambda x: x['Descricao'] if x['Categoria'] == 'Outros' else x['Categoria'], axis=1)
             fig = px.pie(df_grafico, values='Valor', names='Label', hole=.4, template="plotly_dark")
             st.plotly_chart(fig, use_container_width=True)
-            st.metric("Total Gastos Reais", formatar_br(df_grafico['Valor'].sum()))
+            st.metric("Total de Gastos Reais", formatar_br(df_grafico['Valor'].sum()))
         else:
-            st.warning("Sem gastos fora de Uber/99Pop este mês.")
+            st.info("Sem gastos registrados fora dos apps este mês.")
 
-# --- PÁGINAS UBER / 99 / CARTÃO ---
+# --- OUTRAS PÁGINAS ---
 elif st.session_state.pagina in ["Uber", "99Pop"]:
     aba = st.session_state.pagina
-    st.header(f"Registros {aba}")
+    st.header(f"💰 Ganhos {aba}")
     df_app = carregar_dados(aba)
     with st.form(f"f_{aba}"):
-        v_app = st.number_input("Valor Ganho", min_value=0.0); k_app = st.number_input("KM", min_value=0)
+        v_app = st.number_input("Valor", min_value=0.0); k_app = st.number_input("KM", min_value=0)
         if st.form_submit_button("Salvar"):
-            nova_l = pd.DataFrame([{"Data": hoje.strftime("%d/%m/%Y"), "Valor": v_app, "KM_Rodado": k_app, "ID": str(uuid.uuid4())[:8]}])
-            conn.update(worksheet=aba, data=pd.concat([df_app, nova_l], ignore_index=True))
+            n_l = pd.DataFrame([{"Data": hoje.strftime("%d/%m/%Y"), "Valor": v_app, "KM_Rodado": k_app, "ID": str(uuid.uuid4())[:8]}])
+            conn.update(worksheet=aba, data=pd.concat([df_app, n_l], ignore_index=True))
             st.cache_data.clear(); st.rerun()
-    st.dataframe(df_app, use_container_width=True)
+    if not df_app.empty: st.dataframe(df_app.iloc[::-1], use_container_width=True)
 
 elif st.session_state.pagina == "Cartao":
     st.header("💳 Cartões")
-    if not df_cartoes.empty and 'Nome' in df_cartoes.columns:
-        cols_c = st.columns(len(df_cartoes))
+    if not df_cartoes.empty:
         for i, r in df_cartoes.iterrows():
             g = df_g[(df_g['Cartao_Vinculado'] == r['Nome']) & (df_g['Tipo'] == 'Saída')]['Valor'].sum() if not df_g.empty else 0
-            cols_c[i].metric(r['Nome'], formatar_br(r['Limite'] - g), delta=f"Gasto: {formatar_br(g)}")
+            st.metric(r['Nome'], formatar_br(r['Limite'] - g), delta=f"Gasto: {formatar_br(g)}")
     
     with st.expander("➕ Novo Cartão"):
         with st.form("nc"):
