@@ -58,7 +58,6 @@ if st.session_state.pagina == "Geral":
             valor_base = float(row['Valor'])
             
             if not df_g.empty:
-                # Compara o nome limpando espaços para não dar erro
                 movs = df_g[df_g['Forma_Pagamento'].str.strip() == local_planilha]
                 entradas = pd.to_numeric(movs[movs['Tipo'] == "Entrada"]['Valor'], errors='coerce').sum()
                 saidas = pd.to_numeric(movs[movs['Tipo'] == "Saída"]['Valor'], errors='coerce').sum()
@@ -88,12 +87,13 @@ if st.session_state.pagina == "Geral":
             st.subheader("📝 Novo Lançamento")
             v = st.number_input("VALOR (R$)", min_value=0.0, step=0.01)
             
-            # ATENÇÃO: Os nomes aqui devem ser IGUAIS aos da sua planilha na aba Saldos
-            lista_locais = ["Cédula", "Banco Itaú", "Nubank", "Uber", "99Pop"]
+            # --- LISTA ATUALIZADA COM DÉBITO E CRÉDITO ---
+            lista_locais = ["Cédula", "Banco Itaú", "Nubank", "Uber", "99Pop", "Débito", "Cartão de Crédito"]
             f = st.selectbox("LOCAL DO DINHEIRO", lista_locais)
             
             t = st.selectbox("TIPO", ["Saída", "Entrada"])
             d = st.text_input("DESCRIÇÃO")
+            
             if st.form_submit_button("LANÇAR AGORA"):
                 if v > 0:
                     nova = pd.DataFrame([{"Data": hoje_str, "Descricao": d, "Valor": v, "Tipo": t, "Forma_Pagamento": f, "ID": str(uuid.uuid4())[:8]}])
@@ -117,7 +117,7 @@ if st.session_state.pagina == "Geral":
     if not df_g.empty:
         st.write("---")
         st.subheader("📊 Extrato")
-        # Mostra o extrato colorido e organizado
+        
         def colorir(row):
             return ['background-color: rgba(255, 75, 75, 0.2)' if row['Tipo'] == 'Saída' else 'background-color: rgba(0, 255, 0, 0.1)'] * len(row)
         
@@ -126,7 +126,7 @@ if st.session_state.pagina == "Geral":
         with st.expander("🗑️ Excluir Registro"):
             df_del = df_g.iloc[::-1]
             opcs = df_del.apply(lambda r: f"{r['Data']} - {r['Descricao']} ({r['Valor']})", axis=1).tolist()
-            item = st.selectbox("Selecionar:", opcs)
+            item = st.selectbox("Selecionar para apagar:", opcs)
             if st.button("Confirmar Exclusão"):
                 id_rem = df_del.index[df_del.apply(lambda r: f"{r['Data']} - {r['Descricao']} ({r['Valor']})", axis=1) == item][0]
                 df_f = df_g.drop(id_rem)
