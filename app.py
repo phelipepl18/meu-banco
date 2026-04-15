@@ -22,7 +22,7 @@ def carregar_dados(nome_aba):
     try:
         df = conn.read(worksheet=nome_aba.strip(), ttl=0)
         if df is not None and not df.empty:
-            for col in ['Valor', 'Limite', 'Parcelas']:
+            for col in ['Valor', 'Limite']:
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
             if "ID" not in df.columns:
@@ -50,13 +50,18 @@ if btn_cartao: st.session_state.pagina = "Cartao"
 
 hoje_str = datetime.now().strftime("%d/%m/%Y")
 
+# --- LÓGICA DE CARREGAMENTO SEGURO ---
+df_g = carregar_dados("Geral")
+df_saldos = carregar_dados("Saldos")
+df_cartoes = carregar_dados("MeusCartoes")
+
+# Garante que a coluna de vínculo existe para não dar KeyError
+if not df_g.empty and "Cartao_Vinculado" not in df_g.columns:
+    df_g["Cartao_Vinculado"] = "N/A"
+
 # --- PÁGINA GERAL ---
 if st.session_state.pagina == "Geral":
-    df_g = carregar_dados("Geral")
-    df_saldos = carregar_dados("Saldos")
-    df_cartoes = carregar_dados("MeusCartoes")
-    
-    # --- CÁLCULO DOS BALÕES ---
+    # BALÕES DE SALDO
     lucro_total = 0
     if not df_saldos.empty:
         cols = st.columns(len(df_saldos))
@@ -78,7 +83,6 @@ if st.session_state.pagina == "Geral":
             v = st.number_input("VALOR (R$)", min_value=0.0)
             f = st.selectbox("LOCAL", ["Cédula", "Banco Itaú", "Nubank", "Uber", "99Pop", "Débito", "Cartão de Crédito"])
             
-            # Se for cartão, pergunta qual
             cartao_escolhido = "N/A"
             if f == "Cartão de Crédito" and not df_cartoes.empty:
                 cartao_escolhido = st.selectbox("QUAL CARTÃO?", df_cartoes['Nome'].tolist())
@@ -86,9 +90,10 @@ if st.session_state.pagina == "Geral":
             t = st.selectbox("TIPO", ["Saída", "Entrada"])
             d = st.text_input("DESCRIÇÃO")
             if st.form_submit_button("LANÇAR"):
-                nova = pd.DataFrame([{"Data": hoje_str, "Descricao": d, "Valor": v, "Tipo": t, "Forma_Pagamento": f, "Cartao_Vinculado": cartao_escolhido, "ID": str(uuid.uuid4())[:8]}])
-                conn.update(worksheet="Geral", data=pd.concat([df_g, nova], ignore_index=True))
-                st.cache_data.clear(); st.rerun()
+                if v > 0:
+                    nova = pd.DataFrame([{"Data": hoje_str, "Descricao": d, "Valor": v, "Tipo": t, "Forma_Pagamento": f, "Cartao_Vinculado": cartao_escolhido, "ID": str(uuid.uuid4())[:8]}])
+                    conn.update(worksheet="Geral", data=pd.concat([df_g, nova], ignore_index=True))
+                    st.cache_data.clear(); st.rerun()
 
     with col_a:
         with st.expander("⚙️ SOMAR AO SALDO"):
@@ -107,38 +112,29 @@ if st.session_state.pagina == "Geral":
 # --- PÁGINA CARTÃO ---
 elif st.session_state.pagina == "Cartao":
     st.header("💳 Gestão de Cartões de Crédito")
-    df_cartoes = carregar_dados("MeusCartoes")
-    df_g = carregar_dados("Geral")
 
-    # Adicionar Novo Cartão
     with st.expander("➕ Cadastrar Novo Cartão"):
         with st.form("add_cartao"):
-            nome_c = st.text_input("Nome do Cartão (Ex: Nubank, Inter)")
+            nome_c = st.text_input("Nome do Cartão")
             limite_c = st.number_input("Limite Total (R$)", min_value=0.0)
             if st.form_submit_button("Salvar Cartão"):
                 novo_c = pd.DataFrame([{"Nome": nome_c, "Limite": limite_c, "ID": str(uuid.uuid4())[:8]}])
                 conn.update(worksheet="MeusCartoes", data=pd.concat([df_cartoes, novo_c], ignore_index=True))
                 st.cache_data.clear(); st.rerun()
 
-    # Exibição dos Cartões e Limites
     if not df_cartoes.empty:
         st.subheader("Meus Limites Disponíveis")
         cols_c = st.columns(len(df_cartoes))
         for i, row in df_cartoes.iterrows():
-            # Calcula quanto já gastou com esse cartão específico no Geral
-            gastos = df_g[(df_g['Cartao_Vinculado'] == row['Nome']) & (df_g['Tipo'] == 'Saída')]['Valor'].sum()
+            # Cálculo seguro: verifica se a coluna existe antes de somar
+            if not df_g.empty and "Cartao_Vinculado" in df_g.columns:
+                gastos = df_g[(df_g['Cartao_Vinculado'] == row['Nome']) & (df_g['Tipo'] == 'Saída')]['Valor'].sum()
+            else:
+                gastos = 0
+                
             limite_disponivel = row['Limite'] - gastos
-            
             with cols_c[i]:
                 st.metric(row['Nome'], formatar_br(limite_disponivel), help=f"Limite Total: {formatar_br(row['Limite'])}")
         
         st.write("---")
         st.dataframe(df_cartoes.drop(columns=['ID'], errors='ignore'), use_container_width=True)
-        
-        # Opção de Excluir Cartão
-        with st.expander("🗑️ Remover Cartão"):
-            c_del = st.selectbox("Selecione o cartão para remover", df_cartoes['Nome'].tolist())
-            if st.button("Confirmar Remoção"):
-                df_f = df_cartoes[df_cartoes['Nome'] != c_del]
-                conn.update(worksheet="MeusCartoes", data=df_f)
-                st.cache_data.clear(); st.rerun()
