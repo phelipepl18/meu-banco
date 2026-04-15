@@ -48,7 +48,7 @@ if st.session_state.pagina == "Geral":
     df_g = carregar_dados("Geral")
     df_saldos = carregar_dados("Saldos")
     
-    # --- CÁLCULO DOS BALÕES (COM CORREÇÃO PARA 99POP) ---
+    # --- CÁLCULO DOS BALÕES ---
     lucro_total_real = 0
     baloes_display = []
 
@@ -57,12 +57,11 @@ if st.session_state.pagina == "Geral":
             local_planilha = str(row['Local']).strip()
             valor_base = float(row['Valor'])
             
-            # Filtra movimentações (Garante que nomes como '99Pop' e '99 Pop' funcionem)
             if not df_g.empty:
-                # Compara o nome do local ignorando espaços e maiúsculas
+                # Compara o nome limpando espaços para não dar erro
                 movs = df_g[df_g['Forma_Pagamento'].str.strip() == local_planilha]
-                entradas = pd.to_numeric(movs[movs['Tipo'] == "Entrada"]['Valor']).sum()
-                saidas = pd.to_numeric(movs[movs['Tipo'] == "Saída"]['Valor']).sum()
+                entradas = pd.to_numeric(movs[movs['Tipo'] == "Entrada"]['Valor'], errors='coerce').sum()
+                saidas = pd.to_numeric(movs[movs['Tipo'] == "Saída"]['Valor'], errors='coerce').sum()
                 saldo_atual = valor_base + entradas - saidas
             else:
                 saldo_atual = valor_base
@@ -88,11 +87,14 @@ if st.session_state.pagina == "Geral":
         with st.form("form_novo", clear_on_submit=True):
             st.subheader("📝 Novo Lançamento")
             v = st.number_input("VALOR (R$)", min_value=0.0, step=0.01)
-            # Certifique-se que o nome aqui seja igual ao da aba "Saldos"
-            f = st.selectbox("LOCAL DO DINHEIRO", ["Cédula", "Itaú", "Nubank", "Uber", "99Pop"])
+            
+            # ATENÇÃO: Os nomes aqui devem ser IGUAIS aos da sua planilha na aba Saldos
+            lista_locais = ["Cédula", "Banco Itaú", "Nubank", "Uber", "99Pop"]
+            f = st.selectbox("LOCAL DO DINHEIRO", lista_locais)
+            
             t = st.selectbox("TIPO", ["Saída", "Entrada"])
             d = st.text_input("DESCRIÇÃO")
-            if st.form_submit_button("LANÇAR"):
+            if st.form_submit_button("LANÇAR AGORA"):
                 if v > 0:
                     nova = pd.DataFrame([{"Data": hoje_str, "Descricao": d, "Valor": v, "Tipo": t, "Forma_Pagamento": f, "ID": str(uuid.uuid4())[:8]}])
                     conn.update(worksheet="Geral", data=pd.concat([df_g, nova], ignore_index=True))
@@ -103,8 +105,8 @@ if st.session_state.pagina == "Geral":
         with st.expander("⚙️ SOMAR AO SALDO"):
             if not df_saldos.empty:
                 sel = st.selectbox("Escolha o Balão", df_saldos['Local'].tolist())
-                add = st.number_input("Valor", min_value=0.0, step=0.01)
-                if st.button("Somar Agora"):
+                add = st.number_input("Quanto quer somar?", min_value=0.0, step=0.01)
+                if st.button("Confirmar Soma"):
                     idx = df_saldos[df_saldos['Local'] == sel].index[0]
                     df_saldos.at[idx, 'Valor'] += add
                     conn.update(worksheet="Saldos", data=df_saldos)
@@ -114,7 +116,12 @@ if st.session_state.pagina == "Geral":
     # --- EXTRATO ---
     if not df_g.empty:
         st.write("---")
-        st.dataframe(df_g.iloc[::-1].drop(columns=['ID'], errors='ignore'), use_container_width=True)
+        st.subheader("📊 Extrato")
+        # Mostra o extrato colorido e organizado
+        def colorir(row):
+            return ['background-color: rgba(255, 75, 75, 0.2)' if row['Tipo'] == 'Saída' else 'background-color: rgba(0, 255, 0, 0.1)'] * len(row)
+        
+        st.dataframe(df_g.iloc[::-1].drop(columns=['ID'], errors='ignore').style.apply(colorir, axis=1), use_container_width=True)
         
         with st.expander("🗑️ Excluir Registro"):
             df_del = df_g.iloc[::-1]
