@@ -4,6 +4,7 @@ import pandas as pd
 from datetime import datetime
 import uuid
 import plotly.express as px
+from dateutil.relativedelta import relativedelta
 
 st.set_page_config(page_title="Pro Driver - Oficial", layout="wide")
 
@@ -12,7 +13,6 @@ st.markdown("""
     <style>
     [data-testid="stSidebar"] {display: none;}
     .main { background-color: #121212; }
-    /* Esconde o design padrão do metric para usarmos o nosso personalizado */
     [data-testid="stMetric"] { display: none; }
     </style>
     """, unsafe_allow_html=True)
@@ -24,7 +24,9 @@ def carregar_dados(nome_aba):
         df = conn.read(worksheet=nome_aba.strip(), ttl=0)
         if df is not None and not df.empty:
             df.columns = [c.strip() for c in df.columns]
-            for col in ['Valor', 'Limite', 'KM_Rodado', 'Parcelas', 'Dia_Pagamento']:
+            # Garantir colunas numéricas
+            cols_num = ['Valor', 'Limite', 'KM_Rodado', 'Parcelas', 'Dia_Pagamento']
+            for col in cols_num:
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
             if "ID" not in df.columns:
@@ -37,20 +39,12 @@ def carregar_dados(nome_aba):
 def formatar_br(valor):
     return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-# Função para criar o Balão Estilizado (Cartão/Saldo)
 def card_estilizado(titulo, valor, info_extra="", cor_borda="#00FF00"):
     st.markdown(f"""
-    <div style="
-        background: linear-gradient(135deg, #2b2b2b 0%, #1e1e1e 100%);
-        padding: 20px;
-        border-radius: 15px;
-        border-left: 5px solid {cor_borda};
-        margin-bottom: 15px;
-        box-shadow: 2px 2px 10px rgba(0,0,0,0.3);
-    ">
-        <h4 style="margin:0; color: #888; font-size: 14px; text-transform: uppercase;">{titulo}</h4>
-        <h2 style="margin:5px 0; color: #ffffff; font-weight: bold;">{formatar_br(valor)}</h2>
-        <p style="margin:0; font-size: 12px; color: {cor_borda};">{info_extra}</p>
+    <div style="background: linear-gradient(135deg, #2b2b2b 0%, #1e1e1e 100%); padding: 20px; border-radius: 15px; border-left: 5px solid {cor_borda}; margin-bottom: 15px; box-shadow: 2px 2px 10px rgba(0,0,0,0.3);">
+        <h4 style="margin:0; color: #888; font-size: 13px; text-transform: uppercase;">{titulo}</h4>
+        <h2 style="margin:5px 0; color: #ffffff; font-weight: bold; font-size: 24px;">{formatar_br(valor)}</h2>
+        <div style="margin:0; font-size: 12px; color: #ccc; line-height: 1.4;">{info_extra}</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -78,6 +72,8 @@ df_cartoes = carregar_dados("MeusCartoes")
 if st.session_state.pagina == "Geral":
     st.subheader("🏦 Meus Saldos")
     lucro_total = 0
+    
+    # Grid de Saldos
     if not df_saldos.empty:
         cols_s = st.columns(len(df_saldos))
         for i, row in df_saldos.iterrows():
@@ -89,7 +85,7 @@ if st.session_state.pagina == "Geral":
             saldo = v_base + ent - sai
             lucro_total += saldo
             with cols_s[i]:
-                card_estilizado(local, saldo, "Saldo Disponível")
+                card_estilizado(local, saldo, "Saldo em conta")
     
     card_estilizado("💰 Lucro Líquido Total", lucro_total, "Soma de todas as contas", cor_borda="#00E5FF")
     
@@ -120,13 +116,44 @@ if st.session_state.pagina == "Geral":
                 st.cache_data.clear(); st.rerun()
 
     with col_r:
-        st.subheader("💳 Dívida Cartões")
+        st.subheader("💳 Resumo de Cartões")
         if not df_cartoes.empty:
             for _, r in df_cartoes.iterrows():
-                gastos = df_g[(df_g['Cartao_Vinculado'] == r['Nome']) & (df_g['Forma_Pagamento'] == 'Cartão de Crédito') & (df_g['Tipo'] == 'Saída')]['Valor'].sum() if not df_g.empty else 0
-                pagos = df_g[(df_g['Cartao_Vinculado'] == r['Nome']) & (df_g['Categoria'] == 'Fatura Cartão')]['Valor'].sum() if not df_g.empty else 0
-                divida = gastos - pagos
-                card_estilizado(r['Nome'], divida, "Dívida a Pagar", cor_borda="#FF4B4B")
+                # Lógica de Cálculo de Dívida e Parcelas
+                if not df_g.empty:
+                    df_g['Data_DT'] = pd.to_datetime(df_g['Data'], dayfirst=True, errors='coerce')
+                    
+                    # 1. Gastos Totais (Dívida total pendente)
+                    gastos_totais = df_g[(df_g['Cartao_Vinculado'] == r['Nome']) & (df_g['Forma_Pagamento'] == 'Cartão de Crédito') & (df_g['Tipo'] == 'Saída')]['Valor'].sum()
+                    pagos_totais = df_g[(df_g['Cartao_Vinculado'] == r['Nome']) & (df_g['Categoria'] == 'Fatura Cartão')]['Valor'].sum()
+                    divida_total = gastos_totais - pagos_totais
+
+                    # 2. Cálculo da Fatura do Mês Atual
+                    fatura_mes = 0
+                    compras_cartao = df_g[(df_g['Cartao_Vinculado'] == r['Nome']) & (df_g['Forma_Pagamento'] == 'Cartão de Crédito') & (df_g['Tipo'] == 'Saída')]
+                    
+                    for _, compra in compras_cartao.iterrows():
+                        v_parc = compra['Valor'] / compra['Parcelas']
+                        data_inicio = compra['Data_DT']
+                        # Verifica se o mês atual está dentro do intervalo das parcelas
+                        for p in range(int(compra['Parcelas'])):
+                            mes_parcela = data_inicio + relativedelta(months=p)
+                            if mes_parcela.month == hoje.month and mes_parcela.year == hoje.year:
+                                fatura_mes += v_parc
+                    
+                    # Abate o que já foi pago especificamente este mês (opcional, dependendo de como você lança)
+                    pagos_mes = df_g[(df_g['Cartao_Vinculado'] == r['Nome']) & (df_g['Categoria'] == 'Fatura Cartão') & (df_g['Data_DT'].dt.month == hoje.month)]['Valor'].sum()
+                    fatura_mes_ajustada = max(0, fatura_mes - pagos_mes)
+                else:
+                    divida_total = 0
+                    fatura_mes_ajustada = 0
+
+                info = f"""
+                <b>Limite Disponível:</b> {formatar_br(r['Limite'] - divida_total)}<br>
+                <span style='color:#FF4B4B;'><b>Pagar este mês:</b> {formatar_br(fatura_mes_ajustada)}</span><br>
+                <b>Total Gasto (Dívida):</b> {formatar_br(divida_total)}
+                """
+                card_estilizado(r['Nome'], divida_total, info, cor_borda="#FF8C00")
 
     st.subheader("📊 Extrato")
     if not df_g.empty:
@@ -140,40 +167,30 @@ if st.session_state.pagina == "Geral":
                     conn.update(worksheet="Geral", data=df_g[df_g['ID'] != row['ID']])
                     st.cache_data.clear(); st.rerun()
 
-# --- PÁGINA CARTÃO (ATUALIZADA) ---
+# --- PÁGINA CARTÃO ---
 elif st.session_state.pagina == "Cartao":
     st.header("💳 Gestão de Cartões")
     with st.expander("➕ Adicionar Novo Cartão"):
         with st.form("new_card_form"):
             n_c = st.text_input("Nome do Cartão")
             l_c = st.number_input("Limite Total", min_value=0.0)
-            v_c = st.number_input("Dia do Vencimento/Pagamento", min_value=1, max_value=31, value=10)
+            v_c = st.number_input("Dia do Vencimento", min_value=1, max_value=31, value=10)
             if st.form_submit_button("Cadastrar"):
                 novo_cartao = pd.DataFrame([{"Nome": n_c, "Limite": l_c, "Dia_Pagamento": v_c, "ID": str(uuid.uuid4())[:8]}])
                 conn.update(worksheet="MeusCartoes", data=pd.concat([df_cartoes, novo_cartao], ignore_index=True))
                 st.cache_data.clear(); st.rerun()
 
     if not df_cartoes.empty:
-        if "Dia_Pagamento" not in df_cartoes.columns:
-            df_cartoes["Dia_Pagamento"] = 0
-            
         cols = st.columns(3)
         for idx, r in df_cartoes.iterrows():
             with cols[idx % 3]:
-                gastos = df_g[(df_g['Cartao_Vinculado'] == r['Nome']) & (df_g['Forma_Pagamento'] == 'Cartão de Crédito') & (df_g['Tipo'] == 'Saída')]['Valor'].sum() if not df_g.empty else 0
-                pagos = df_g[(df_g['Cartao_Vinculado'] == r['Nome']) & (df_g['Categoria'] == 'Fatura Cartão')]['Valor'].sum() if not df_g.empty else 0
-                divida = gastos - pagos
-                
-                # Exibição do Dia de Pagamento no Balão
-                dia_venc = int(r['Dia_Pagamento']) if r['Dia_Pagamento'] > 0 else "N/A"
-                info_texto = f"Dívida: {formatar_br(divida)} | Vence dia: {dia_venc}"
-                
-                card_estilizado(r['Nome'], r['Limite'] - divida, info_texto, cor_borda="#FF8C00")
+                # Reutiliza lógica de cálculo aqui se necessário ou simplifica
+                card_estilizado(r['Nome'], r['Limite'], f"Vencimento todo dia {int(r['Dia_Pagamento'])}", cor_borda="#FF8C00")
                 if st.button(f"Remover {r['Nome']}", key=f"del_c_{r['ID']}", use_container_width=True):
                     conn.update(worksheet="MeusCartoes", data=df_cartoes[df_cartoes['ID'] != r['ID']])
                     st.cache_data.clear(); st.rerun()
 
-# --- PÁGINA UBER / 99POP ---
+# --- PÁGINAS RESTANTES (Uber, 99Pop, Relatórios - Mantidas conforme original) ---
 elif st.session_state.pagina in ["Uber", "99Pop"]:
     aba = st.session_state.pagina
     st.header(f"💰 Ganhos {aba}")
