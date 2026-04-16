@@ -12,8 +12,8 @@ st.markdown("""
     <style>
     [data-testid="stSidebar"] {display: none;}
     .main { background-color: #121212; }
-    div[data-testid="stMetricValue"] { color: #00FF00; }
-    .stMetric { background-color: #1e1e1e; padding: 15px; border-radius: 10px; border: 1px solid #333; }
+    /* Esconde o design padrão do metric para usarmos o nosso personalizado */
+    [data-testid="stMetric"] { display: none; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -37,6 +37,23 @@ def carregar_dados(nome_aba):
 def formatar_br(valor):
     return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
+# Função para criar o Balão Estilizado (Cartão/Saldo)
+def card_estilizado(titulo, valor, info_extra="", cor_borda="#00FF00"):
+    st.markdown(f"""
+    <div style="
+        background: linear-gradient(135deg, #2b2b2b 0%, #1e1e1e 100%);
+        padding: 20px;
+        border-radius: 15px;
+        border-left: 5px solid {cor_borda};
+        margin-bottom: 15px;
+        box-shadow: 2px 2px 10px rgba(0,0,0,0.3);
+    ">
+        <h4 style="margin:0; color: #888; font-size: 14px; text-transform: uppercase;">{titulo}</h4>
+        <h2 style="margin:5px 0; color: #ffffff; font-weight: bold;">{formatar_br(valor)}</h2>
+        <p style="margin:0; font-size: 12px; color: {cor_borda};">{info_extra}</p>
+    </div>
+    """, unsafe_allow_html=True)
+
 # --- NAVEGAÇÃO ---
 if 'pagina' not in st.session_state: st.session_state.pagina = "Geral"
 
@@ -59,8 +76,10 @@ df_cartoes = carregar_dados("MeusCartoes")
 
 # --- PÁGINA GERAL ---
 if st.session_state.pagina == "Geral":
+    st.subheader("🏦 Meus Saldos")
     lucro_total = 0
     if not df_saldos.empty:
+        # Balões de saldo com o novo layout
         cols_s = st.columns(len(df_saldos))
         for i, row in df_saldos.iterrows():
             local = str(row['Local']).strip()
@@ -70,9 +89,12 @@ if st.session_state.pagina == "Geral":
             sai = movs[movs['Tipo'] == "Saída"]['Valor'].sum() if not movs.empty else 0
             saldo = v_base + ent - sai
             lucro_total += saldo
-            cols_s[i].metric(local, formatar_br(saldo))
+            with cols_s[i]:
+                card_estilizado(local, saldo, "Saldo Disponível")
     
-    st.metric("💰 LUCRO LÍQUIDO TOTAL", formatar_br(lucro_total))
+    # Balão do Lucro Total em destaque
+    card_estilizado("💰 Lucro Líquido Total", lucro_total, "Soma de todas as contas", cor_borda="#00E5FF")
+    
     st.write("---")
     
     col_l, col_r = st.columns([2, 1])
@@ -100,14 +122,14 @@ if st.session_state.pagina == "Geral":
                 st.cache_data.clear(); st.rerun()
 
     with col_r:
-        st.subheader("💳 Resumo Cartões")
+        st.subheader("💳 Dívida Cartões")
         if not df_cartoes.empty:
             for _, r in df_cartoes.iterrows():
                 gastos = df_g[(df_g['Cartao_Vinculado'] == r['Nome']) & (df_g['Forma_Pagamento'] == 'Cartão de Crédito') & (df_g['Tipo'] == 'Saída')]['Valor'].sum() if not df_g.empty else 0
                 pagos = df_g[(df_g['Cartao_Vinculado'] == r['Nome']) & (df_g['Categoria'] == 'Fatura Cartão')]['Valor'].sum() if not df_g.empty else 0
                 divida = gastos - pagos
-                disp = r['Limite'] - divida
-                st.metric(r['Nome'], formatar_br(disp), f"Dívida: {formatar_br(divida)}", delta_color="inverse")
+                # Mini balão para a lateral
+                card_estilizado(r['Nome'], divida, "Dívida a Pagar", cor_borda="#FF4B4B")
 
     st.subheader("📊 Extrato")
     if not df_g.empty:
@@ -121,22 +143,7 @@ if st.session_state.pagina == "Geral":
                     conn.update(worksheet="Geral", data=df_g[df_g['ID'] != row['ID']])
                     st.cache_data.clear(); st.rerun()
 
-# --- PÁGINA UBER / 99POP ---
-elif st.session_state.pagina in ["Uber", "99Pop"]:
-    aba = st.session_state.pagina
-    st.header(f"💰 Ganhos {aba}")
-    df_app = carregar_dados(aba)
-    with st.form(f"f_{aba}"):
-        v_dia = st.number_input("Ganhos", min_value=0.0); km_dia = st.number_input("KM", min_value=0)
-        if st.form_submit_button("Salvar"):
-            nova_l = pd.DataFrame([{"Data": hoje.strftime("%d/%m/%Y"), "Valor": v_dia, "KM_Rodado": km_dia, "ID": str(uuid.uuid4())[:8]}])
-            conn.update(worksheet=aba, data=pd.concat([df_app, nova_l], ignore_index=True))
-            st.cache_data.clear(); st.rerun()
-    if not df_app.empty:
-        st.metric("Total Ganho", formatar_br(df_app['Valor'].sum()))
-        st.dataframe(df_app.iloc[::-1], use_container_width=True)
-
-# --- PÁGINA CARTÃO (DESIGN MODERNO) ---
+# --- PÁGINA CARTÃO (MANTIDA) ---
 elif st.session_state.pagina == "Cartao":
     st.header("💳 Gestão de Cartões")
     with st.expander("➕ Adicionar Novo Cartão"):
@@ -153,20 +160,26 @@ elif st.session_state.pagina == "Cartao":
                 gastos = df_g[(df_g['Cartao_Vinculado'] == r['Nome']) & (df_g['Forma_Pagamento'] == 'Cartão de Crédito') & (df_g['Tipo'] == 'Saída')]['Valor'].sum() if not df_g.empty else 0
                 pagos = df_g[(df_g['Cartao_Vinculado'] == r['Nome']) & (df_g['Categoria'] == 'Fatura Cartão')]['Valor'].sum() if not df_g.empty else 0
                 divida = gastos - pagos
-                st.markdown(f"""
-                <div style="background: linear-gradient(135deg, #2b2b2b 0%, #1e1e1e 100%); padding: 20px; border-radius: 15px; border-left: 5px solid #00FF00; margin-bottom: 10px; box-shadow: 2px 2px 10px rgba(0,0,0,0.3);">
-                    <h3 style="margin:0; color: #fff;">{r['Nome']}</h3>
-                    <p style="margin:0; font-size: 12px; color: #888;">Limite Disponível</p>
-                    <h2 style="margin:0; color: #00FF00;">{formatar_br(r['Limite'] - divida)}</h2>
-                    <hr style="margin: 10px 0; border: 0.5px solid #444;">
-                    <p style="margin:0; font-size: 11px; color: #888;">Dívida: <span style="color: #ff4b4b;">{formatar_br(divida)}</span></p>
-                </div>
-                """, unsafe_allow_html=True)
+                card_estilizado(r['Nome'], r['Limite'] - divida, f"Dívida: {formatar_br(divida)}")
                 if st.button(f"Remover {r['Nome']}", key=f"del_c_{r['ID']}", use_container_width=True):
                     conn.update(worksheet="MeusCartoes", data=df_cartoes[df_cartoes['ID'] != r['ID']])
                     st.cache_data.clear(); st.rerun()
 
-# --- PÁGINA RELATÓRIOS ---
+# --- PÁGINA UBER / 99POP / RELATÓRIOS (Simplificadas para manter performance) ---
+elif st.session_state.pagina in ["Uber", "99Pop"]:
+    aba = st.session_state.pagina
+    st.header(f"💰 Ganhos {aba}")
+    df_app = carregar_dados(aba)
+    with st.form(f"f_{aba}"):
+        v_dia = st.number_input("Ganhos", min_value=0.0); km_dia = st.number_input("KM", min_value=0)
+        if st.form_submit_button("Salvar"):
+            nova_l = pd.DataFrame([{"Data": hoje.strftime("%d/%m/%Y"), "Valor": v_dia, "KM_Rodado": km_dia, "ID": str(uuid.uuid4())[:8]}])
+            conn.update(worksheet=aba, data=pd.concat([df_app, nova_l], ignore_index=True))
+            st.cache_data.clear(); st.rerun()
+    if not df_app.empty:
+        card_estilizado(f"Total {aba}", df_app['Valor'].sum(), f"KM Total: {df_app['KM_Rodado'].sum()}")
+        st.dataframe(df_app.iloc[::-1], use_container_width=True)
+
 elif st.session_state.pagina == "Relatorios":
     st.header("📊 Relatórios")
     if not df_g.empty:
@@ -176,4 +189,4 @@ elif st.session_state.pagina == "Relatorios":
         if not df_grafico.empty:
             df_grafico['Label'] = df_grafico.apply(lambda x: x['Descricao'] if x['Categoria'] == 'Outros' else x['Categoria'], axis=1)
             st.plotly_chart(px.pie(df_grafico, values='Valor', names='Label', hole=.4, template="plotly_dark"), use_container_width=True)
-            st.metric("Total Gastos do Mês", formatar_br(df_grafico['Valor'].sum()))
+            card_estilizado("Gasto Total do Mês", df_grafico['Valor'].sum(), "Despesas fora dos apps", "#FF4B4B")
