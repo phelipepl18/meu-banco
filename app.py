@@ -24,7 +24,7 @@ def carregar_dados(nome_aba):
         df = conn.read(worksheet=nome_aba.strip(), ttl=0)
         if df is not None and not df.empty:
             df.columns = [c.strip() for c in df.columns]
-            for col in ['Valor', 'Limite', 'KM_Rodado', 'Parcelas']:
+            for col in ['Valor', 'Limite', 'KM_Rodado', 'Parcelas', 'Dia_Pagamento']:
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
             if "ID" not in df.columns:
@@ -79,7 +79,6 @@ if st.session_state.pagina == "Geral":
     st.subheader("🏦 Meus Saldos")
     lucro_total = 0
     if not df_saldos.empty:
-        # Balões de saldo com o novo layout
         cols_s = st.columns(len(df_saldos))
         for i, row in df_saldos.iterrows():
             local = str(row['Local']).strip()
@@ -92,7 +91,6 @@ if st.session_state.pagina == "Geral":
             with cols_s[i]:
                 card_estilizado(local, saldo, "Saldo Disponível")
     
-    # Balão do Lucro Total em destaque
     card_estilizado("💰 Lucro Líquido Total", lucro_total, "Soma de todas as contas", cor_borda="#00E5FF")
     
     st.write("---")
@@ -128,7 +126,6 @@ if st.session_state.pagina == "Geral":
                 gastos = df_g[(df_g['Cartao_Vinculado'] == r['Nome']) & (df_g['Forma_Pagamento'] == 'Cartão de Crédito') & (df_g['Tipo'] == 'Saída')]['Valor'].sum() if not df_g.empty else 0
                 pagos = df_g[(df_g['Cartao_Vinculado'] == r['Nome']) & (df_g['Categoria'] == 'Fatura Cartão')]['Valor'].sum() if not df_g.empty else 0
                 divida = gastos - pagos
-                # Mini balão para a lateral
                 card_estilizado(r['Nome'], divida, "Dívida a Pagar", cor_borda="#FF4B4B")
 
     st.subheader("📊 Extrato")
@@ -143,29 +140,40 @@ if st.session_state.pagina == "Geral":
                     conn.update(worksheet="Geral", data=df_g[df_g['ID'] != row['ID']])
                     st.cache_data.clear(); st.rerun()
 
-# --- PÁGINA CARTÃO (MANTIDA) ---
+# --- PÁGINA CARTÃO (ATUALIZADA) ---
 elif st.session_state.pagina == "Cartao":
     st.header("💳 Gestão de Cartões")
     with st.expander("➕ Adicionar Novo Cartão"):
         with st.form("new_card_form"):
-            n_c = st.text_input("Nome"); l_c = st.number_input("Limite", min_value=0.0)
+            n_c = st.text_input("Nome do Cartão")
+            l_c = st.number_input("Limite Total", min_value=0.0)
+            v_c = st.number_input("Dia do Vencimento/Pagamento", min_value=1, max_value=31, value=10)
             if st.form_submit_button("Cadastrar"):
-                conn.update(worksheet="MeusCartoes", data=pd.concat([df_cartoes, pd.DataFrame([{"Nome": n_c, "Limite": l_c, "ID": str(uuid.uuid4())[:8]}])], ignore_index=True))
+                novo_cartao = pd.DataFrame([{"Nome": n_c, "Limite": l_c, "Dia_Pagamento": v_c, "ID": str(uuid.uuid4())[:8]}])
+                conn.update(worksheet="MeusCartoes", data=pd.concat([df_cartoes, novo_cartao], ignore_index=True))
                 st.cache_data.clear(); st.rerun()
 
     if not df_cartoes.empty:
+        if "Dia_Pagamento" not in df_cartoes.columns:
+            df_cartoes["Dia_Pagamento"] = 0
+            
         cols = st.columns(3)
         for idx, r in df_cartoes.iterrows():
             with cols[idx % 3]:
                 gastos = df_g[(df_g['Cartao_Vinculado'] == r['Nome']) & (df_g['Forma_Pagamento'] == 'Cartão de Crédito') & (df_g['Tipo'] == 'Saída')]['Valor'].sum() if not df_g.empty else 0
                 pagos = df_g[(df_g['Cartao_Vinculado'] == r['Nome']) & (df_g['Categoria'] == 'Fatura Cartão')]['Valor'].sum() if not df_g.empty else 0
                 divida = gastos - pagos
-                card_estilizado(r['Nome'], r['Limite'] - divida, f"Dívida: {formatar_br(divida)}")
+                
+                # Exibição do Dia de Pagamento no Balão
+                dia_venc = int(r['Dia_Pagamento']) if r['Dia_Pagamento'] > 0 else "N/A"
+                info_texto = f"Dívida: {formatar_br(divida)} | Vence dia: {dia_venc}"
+                
+                card_estilizado(r['Nome'], r['Limite'] - divida, info_texto, cor_borda="#FF8C00")
                 if st.button(f"Remover {r['Nome']}", key=f"del_c_{r['ID']}", use_container_width=True):
                     conn.update(worksheet="MeusCartoes", data=df_cartoes[df_cartoes['ID'] != r['ID']])
                     st.cache_data.clear(); st.rerun()
 
-# --- PÁGINA UBER / 99POP / RELATÓRIOS (Simplificadas para manter performance) ---
+# --- PÁGINA UBER / 99POP ---
 elif st.session_state.pagina in ["Uber", "99Pop"]:
     aba = st.session_state.pagina
     st.header(f"💰 Ganhos {aba}")
