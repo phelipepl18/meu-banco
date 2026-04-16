@@ -5,7 +5,7 @@ from datetime import datetime
 import uuid
 import plotly.express as px
 
-st.set_page_config(page_title="Pro Driver - Gestão Financeira", layout="wide")
+st.set_page_config(page_title="Pro Driver - Oficial", layout="wide")
 
 # --- ESTILO ---
 st.markdown("""
@@ -24,10 +24,11 @@ def carregar_dados(nome_aba):
         df = conn.read(worksheet=nome_aba.strip(), ttl=0)
         if df is not None and not df.empty:
             df.columns = [c.strip() for c in df.columns]
-            cols_num = ['Valor', 'Limite', 'Parcelas', 'KM_Rodado']
-            for col in cols_num:
+            for col in ['Valor', 'Limite', 'Parcelas']:
                 if col in df.columns:
                     df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
+            if "ID" not in df.columns:
+                df["ID"] = [str(uuid.uuid4())[:8] for _ in range(len(df))]
             return df
         return pd.DataFrame()
     except:
@@ -36,9 +37,10 @@ def carregar_dados(nome_aba):
 def formatar_br(valor):
     return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
 
-# --- NAVEGAÇÃO ---
+# --- ESTADO DA PÁGINA ---
 if 'pagina' not in st.session_state: st.session_state.pagina = "Geral"
 
+# --- NAVEGAÇÃO ---
 m1, m2, m3, m4, m5 = st.columns(5)
 with m1: 
     if st.button("🏠 Geral", use_container_width=True): st.session_state.pagina = "Geral"
@@ -72,89 +74,85 @@ if st.session_state.pagina == "Geral":
             lucro_total += saldo
             cols_s[i].metric(local, formatar_br(saldo))
     
+    st.metric("💰 LUCRO LÍQUIDO TOTAL", formatar_br(lucro_total))
     st.write("---")
-    col_l, col_a = st.columns([2, 1])
+
+    col_l, col_r = st.columns([2, 1])
     
     with col_l:
-        with st.form("form_novo", clear_on_submit=True):
-            st.subheader("📝 Novo Lançamento")
-            v = st.number_input("VALOR TOTAL (R$)", min_value=0.0)
-            c1, c2 = st.columns(2)
-            with c1:
-                f = st.selectbox("LOCAL", ["Cédula", "Banco Itaú", "Nubank", "Uber", "99Pop", "Cartão de Crédito"])
-                t = st.selectbox("TIPO", ["Saída", "Entrada"])
-            with c2:
-                cat = st.selectbox("CATEGORIA", ["Combustível", "Manutenção", "Alimentação", "Aluguel", "Fatura Cartão", "Outros"])
-                cartao_list = df_cartoes['Nome'].tolist() if not df_cartoes.empty else []
-                cartao_escolhido = st.selectbox("QUAL CARTÃO?", ["N/A"] + cartao_list) if f == "Cartão de Crédito" else "N/A"
+        st.subheader("📝 Novo Lançamento")
+        # Removido o 'st.form' para os campos aparecerem dinamicamente
+        v = st.number_input("VALOR (R$)", min_value=0.0, step=0.01)
+        c1, c2 = st.columns(2)
+        with c1:
+            f = st.selectbox("LOCAL", ["Cédula", "Banco Itaú", "Nubank", "Uber", "99Pop", "Cartão de Crédito"])
+            t = st.selectbox("TIPO", ["Saída", "Entrada"])
+        with c2:
+            cat = st.selectbox("CATEGORIA", ["Combustível", "Manutenção", "Alimentação", "Aluguel", "Fatura Cartão", "Outros"])
             
-            # OPÇÃO DE PARCELAMENTO
+            # LÓGICA DINÂMICA: Aparece na hora se selecionar Cartão
+            cartao_escolhido = "N/A"
             parc = 1
             if f == "Cartão de Crédito":
-                parc = st.number_input("PARCELAS", min_value=1, max_value=48, value=1)
-            
-            d = st.text_input("DESCRIÇÃO (Use nomes fáceis para identificar pagamentos)")
-            
-            if st.form_submit_button("LANÇAR"):
-                if v > 0:
-                    novo_id = str(uuid.uuid4())[:8]
-                    nova = pd.DataFrame([{
-                        "Data": hoje.strftime("%d/%m/%Y"), 
-                        "Descricao": d, "Valor": v, "Tipo": t, 
-                        "Forma_Pagamento": f, "Categoria": cat, 
-                        "Cartao_Vinculado": cartao_escolhido, 
-                        "Parcelas": parc, "ID": novo_id
-                    }])
-                    conn.update(worksheet="Geral", data=pd.concat([df_g, nova], ignore_index=True))
-                    st.cache_data.clear(); st.rerun()
+                cartao_list = df_cartoes['Nome'].tolist() if not df_cartoes.empty else []
+                cartao_escolhido = st.selectbox("QUAL CARTÃO?", cartao_list)
+                parc = st.number_input("Nº DE PARCELAS", min_value=1, max_value=48, value=1)
+        
+        d = st.text_input("DESCRIÇÃO")
+        
+        if st.button("🚀 LANÇAR AGORA", use_container_width=True):
+            if v > 0:
+                nova = pd.DataFrame([{
+                    "Data": hoje.strftime("%d/%m/%Y"), 
+                    "Descricao": d, "Valor": v, "Tipo": t, 
+                    "Forma_Pagamento": f, "Categoria": cat, 
+                    "Cartao_Vinculado": cartao_escolhido, 
+                    "Parcelas": parc, "ID": str(uuid.uuid4())[:8]
+                }])
+                conn.update(worksheet="Geral", data=pd.concat([df_g, nova], ignore_index=True))
+                st.cache_data.clear(); st.rerun()
 
-    # EXTRATO
-    st.subheader("📊 Extrato")
+    with col_r:
+        st.subheader("💳 Limites Atuais")
+        if not df_cartoes.empty:
+            for _, r in df_cartoes.iterrows():
+                gastos = df_g[(df_g['Cartao_Vinculado'] == r['Nome']) & (df_g['Tipo'] == 'Saída')]['Valor'].sum() if not df_g.empty else 0
+                disp = r['Limite'] - gastos
+                st.metric(r['Nome'], formatar_br(disp), f"Gasto: {formatar_br(gastos)}", delta_color="inverse")
+        else:
+            st.info("Cadastre cartões na aba 💳 Cartão.")
+
+    st.write("---")
+    st.subheader("📊 Extrato Detalhado")
     if not df_g.empty:
-        df_ext = df_g.iloc[::-1]
-        for idx, r in df_ext.iterrows():
-            with st.expander(f"{r['Data']} - {r['Descricao']} | {formatar_br(r['Valor'])}"):
-                st.write(f"Local: {r['Forma_Pagamento']} | Parcelas: {r.get('Parcelas', 1)}")
-                if st.button("🗑️ Excluir", key=f"del_{r['ID']}"):
-                    df_novo = df_g[df_g['ID'] != r['ID']]
+        df_ext = df_g.iloc[::-1].copy()
+        for _, row in df_ext.iterrows():
+            cor = "🔴" if row['Tipo'] == "Saída" else "🟢"
+            info_parc = f" | {int(row['Parcelas'])}x" if row['Parcelas'] > 1 else ""
+            with st.expander(f"{cor} {row['Data']} - {row['Descricao']} ({formatar_br(row['Valor'])}{info_parc})"):
+                st.write(f"**Local:** {row['Forma_Pagamento']} | **Cartão:** {row['Cartao_Vinculado']}")
+                st.write(f"**Categoria:** {row['Categoria']} | **ID:** {row['ID']}")
+                if st.button("🗑️ Excluir", key=f"del_{row['ID']}"):
+                    df_novo = df_g[df_g['ID'] != row['ID']]
                     conn.update(worksheet="Geral", data=df_novo)
                     st.cache_data.clear(); st.rerun()
 
-# --- PÁGINA CARTÃO ---
+# --- ABA CARTÃO (GESTÃO) ---
 elif st.session_state.pagina == "Cartao":
-    st.header("💳 Controle de Cartões e Parcelas")
+    st.header("💳 Configuração de Cartões")
+    with st.form("novo_c"):
+        n = st.text_input("Nome do Cartão (Ex: Nubank)")
+        l = st.number_input("Limite Total", min_value=0.0)
+        if st.form_submit_button("Salvar"):
+            nc = pd.DataFrame([{"Nome": n, "Limite": l, "ID": str(uuid.uuid4())[:8]}])
+            conn.update(worksheet="MeusCartoes", data=pd.concat([df_cartoes, nc], ignore_index=True))
+            st.cache_data.clear(); st.rerun()
     
     if not df_cartoes.empty:
-        for i, r in df_cartoes.iterrows():
-            # 1. Total de compras feitas no cartão (Saídas)
-            compras = df_g[(df_g['Cartao_Vinculado'] == r['Nome']) & (df_g['Tipo'] == 'Saída')]
-            total_gasto = compras['Valor'].sum()
-            
-            # 2. Total de pagamentos feitos para esse cartão (Identificados pela Descrição ou Categoria Fatura)
-            # Regra: Se a descrição da Entrada for igual à descrição da Saída, ele abate.
-            pagamentos = df_g[(df_g['Forma_Pagamento'] != 'Cartão de Crédito') & 
-                              (df_g['Tipo'] == 'Saída') & 
-                              (df_g['Categoria'] == 'Fatura Cartão') &
-                              (df_g['Descricao'].str.contains(r['Nome'], case=False, na=False))]
-            
-            # Simplificação para o limite: Limite Total - Gastos Atuais que ainda não foram pagos
-            limite_atual = r['Limite'] - total_gasto
-            
-            col1, col2, col3 = st.columns(3)
-            col1.metric(f"Cartão {r['Nome']}", formatar_br(limite_atual), "Limite Disp.")
-            col2.metric("Total Gasto", formatar_br(total_gasto))
-            col3.metric("Limite Total", formatar_br(r['Limite']))
-            
-            if st.button(f"🗑️ Remover {r['Nome']}", key=f"del_c_{r['ID']}"):
+        for _, r in df_cartoes.iterrows():
+            col1, col2 = st.columns([4,1])
+            col1.write(f"**{r['Nome']}** - Limite: {formatar_br(r['Limite'])}")
+            if col2.button("🗑️", key=f"dc_{r['ID']}"):
                 df_c_novo = df_cartoes[df_cartoes['ID'] != r['ID']]
                 conn.update(worksheet="MeusCartoes", data=df_c_novo)
-                st.cache_data.clear(); st.rerun()
-            st.write("---")
-    
-    with st.expander("➕ Adicionar Novo Cartão"):
-        with st.form("new_card"):
-            n = st.text_input("Nome"); lim = st.number_input("Limite")
-            if st.form_submit_button("Cadastrar"):
-                nc = pd.DataFrame([{"Nome": n, "Limite": lim, "ID": str(uuid.uuid4())[:8]}])
-                conn.update(worksheet="MeusCartoes", data=pd.concat([df_cartoes, nc], ignore_index=True))
                 st.cache_data.clear(); st.rerun()
