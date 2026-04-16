@@ -171,7 +171,74 @@ elif st.session_state.pagina == "Cartao":
             if col2.button("🗑️", key=f"del_c_{r['ID']}"):
                 conn.update(worksheet="MeusCartoes", data=df_cartoes[df_cartoes['ID'] != r['ID']])
                 st.cache_data.clear(); st.rerun()
+# --- ABA CARTÃO (GESTÃO DE LIMITES COM DESIGN MODERNO) ---
+elif st.session_state.pagina == "Cartao":
+    st.header("💳 Meus Cartões")
+    
+    # Espaço para adicionar novo cartão com design limpo
+    with st.expander("➕ Adicionar Novo Cartão"):
+        with st.form("new_card", clear_on_submit=True):
+            col_n, col_l = st.columns(2)
+            n_c = col_n.text_input("Nome do Cartão (Ex: Nubank)")
+            l_c = col_l.number_input("Limite Total (R$)", min_value=0.0)
+            if st.form_submit_button("Cadastrar Cartão"):
+                if n_c:
+                    novo_df = pd.concat([df_cartoes, pd.DataFrame([{"Nome": n_c, "Limite": l_c, "ID": str(uuid.uuid4())[:8]}])], ignore_index=True)
+                    conn.update(worksheet="MeusCartoes", data=novo_df)
+                    st.cache_data.clear(); st.rerun()
 
+    st.write("---")
+
+    if not df_cartoes.empty:
+        # Layout em Grid para os cartões
+        # Criamos colunas para os cartões (máximo 3 por linha)
+        cols = st.columns(3)
+        for idx, r in df_cartoes.iterrows():
+            with cols[idx % 3]:
+                # Cálculo de valores
+                gastos = df_g[(df_g['Cartao_Vinculado'] == r['Nome']) & (df_g['Forma_Pagamento'] == 'Cartão de Crédito') & (df_g['Tipo'] == 'Saída')]['Valor'].sum() if not df_g.empty else 0
+                pagos = df_g[(df_g['Cartao_Vinculado'] == r['Nome']) & (df_g['Categoria'] == 'Fatura Cartão')]['Valor'].sum() if not df_g.empty else 0
+                divida = gastos - pagos
+                disp = r['Limite'] - divida
+                
+                # Container do Cartão "Virtual"
+                st.markdown(f"""
+                <div style="
+                    background: linear-gradient(135deg, #2b2b2b 0%, #1e1e1e 100%);
+                    padding: 20px;
+                    border-radius: 15px;
+                    border-left: 5px solid #00FF00;
+                    margin-bottom: 10px;
+                    box-shadow: 2px 2px 10px rgba(0,0,0,0.3);
+                ">
+                    <h3 style="margin:0; color: #ffffff;">{r['Nome']}</h3>
+                    <p style="margin:0; font-size: 12px; color: #888;">Limite Disponível</p>
+                    <h2 style="margin:0; color: #00FF00;">{formatar_br(disp)}</h2>
+                    <hr style="margin: 10px 0; border: 0.5px solid #444;">
+                    <div style="display: flex; justify-content: space-between;">
+                        <div>
+                            <p style="margin:0; font-size: 11px; color: #888;">Dívida Atual</p>
+                            <p style="margin:0; font-size: 14px; color: #ff4b4b;">{formatar_br(divida)}</p>
+                        </div>
+                        <div>
+                            <p style="margin:0; font-size: 11px; color: #888;">Limite Total</p>
+                            <p style="margin:0; font-size: 14px; color: #eee;">{formatar_br(r['Limite'])}</p>
+                        </div>
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                # Botão de excluir centralizado abaixo do cartão
+                if st.button(f"Remover {r['Nome']}", key=f"del_c_{r['ID']}", use_container_width=True):
+                    conn.update(worksheet="MeusCartoes", data=df_cartoes[df_cartoes['ID'] != r['ID']])
+                    st.cache_data.clear(); st.rerun()
+    else:
+        st.info("Você ainda não cadastrou nenhum cartão.")
+
+# --- PÁGINA RELATÓRIOS (APENAS PARA GARANTIR QUE ESTÁ OK) ---
+elif st.session_state.pagina == "Relatorios":
+    # Mantenha o código de relatórios como está...
+    pass
 # --- PÁGINA RELATÓRIOS (GRÁFICOS) ---
 elif st.session_state.pagina == "Relatorios":
     st.header("📊 Resumo Financeiro")
