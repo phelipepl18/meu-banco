@@ -60,7 +60,7 @@ df_cartoes = carregar_dados("MeusCartoes")
 
 # --- PÁGINA GERAL ---
 if st.session_state.pagina == "Geral":
-    # BALÕES DE SALDO
+    # 1. CÁLCULO DE SALDOS (BALÕES)
     lucro_total = 0
     if not df_saldos.empty:
         cols_s = st.columns(len(df_saldos))
@@ -81,27 +81,31 @@ if st.session_state.pagina == "Geral":
     
     with col_l:
         st.subheader("📝 Novo Lançamento")
-        # Removido o 'st.form' para os campos aparecerem dinamicamente
         v = st.number_input("VALOR (R$)", min_value=0.0, step=0.01)
+        
         c1, c2 = st.columns(2)
         with c1:
-            f = st.selectbox("LOCAL", ["Cédula", "Banco Itaú", "Nubank", "Uber", "99Pop", "Cartão de Crédito"])
+            # O LOCAL é de onde sai o dinheiro (Ex: Itaú)
+            f = st.selectbox("SAINDO DE (LOCAL)", ["Cédula", "Banco Itaú", "Nubank", "Uber", "99Pop", "Cartão de Crédito"])
             t = st.selectbox("TIPO", ["Saída", "Entrada"])
+        
         with c2:
             cat = st.selectbox("CATEGORIA", ["Combustível", "Manutenção", "Alimentação", "Aluguel", "Fatura Cartão", "Outros"])
             
-            # LÓGICA DINÂMICA: Aparece na hora se selecionar Cartão
+            # Se for gasto no crédito OU pagamento de fatura, precisa selecionar o cartão
             cartao_escolhido = "N/A"
             parc = 1
-            if f == "Cartão de Crédito":
+            if f == "Cartão de Crédito" or cat == "Fatura Cartão":
                 cartao_list = df_cartoes['Nome'].tolist() if not df_cartoes.empty else []
                 cartao_escolhido = st.selectbox("QUAL CARTÃO?", cartao_list)
-                parc = st.number_input("Nº DE PARCELAS", min_value=1, max_value=48, value=1)
+                if f == "Cartão de Crédito":
+                    parc = st.number_input("Nº DE PARCELAS", min_value=1, max_value=48, value=1)
         
         d = st.text_input("DESCRIÇÃO")
         
         if st.button("🚀 LANÇAR AGORA", use_container_width=True):
             if v > 0:
+                # Se for Fatura Cartão, o sistema registra como uma 'Entrada' interna no cartão para abater o gasto
                 nova = pd.DataFrame([{
                     "Data": hoje.strftime("%d/%m/%Y"), 
                     "Descricao": d, "Valor": v, "Tipo": t, 
@@ -113,14 +117,20 @@ if st.session_state.pagina == "Geral":
                 st.cache_data.clear(); st.rerun()
 
     with col_r:
-        st.subheader("💳 Limites Atuais")
+        st.subheader("💳 Limites de Cartão")
         if not df_cartoes.empty:
             for _, r in df_cartoes.iterrows():
-                gastos = df_g[(df_g['Cartao_Vinculado'] == r['Nome']) & (df_g['Tipo'] == 'Saída')]['Valor'].sum() if not df_g.empty else 0
-                disp = r['Limite'] - gastos
-                st.metric(r['Nome'], formatar_br(disp), f"Gasto: {formatar_br(gastos)}", delta_color="inverse")
+                # LÓGICA DE CÁLCULO DO CARTÃO:
+                # Gastos (Saídas no cartão) - Pagamentos (Fatura Cartão vinculada a este cartão)
+                gastos_reais = df_g[(df_g['Cartao_Vinculado'] == r['Nome']) & (df_g['Forma_Pagamento'] == 'Cartão de Crédito') & (df_g['Tipo'] == 'Saída')]['Valor'].sum() if not df_g.empty else 0
+                pagamentos_feitos = df_g[(df_g['Cartao_Vinculado'] == r['Nome']) & (df_g['Categoria'] == 'Fatura Cartão')]['Valor'].sum() if not df_g.empty else 0
+                
+                divida_atual = gastos_reais - pagamentos_feitos
+                disp = r['Limite'] - divida_atual
+                
+                st.metric(r['Nome'], formatar_br(disp), f"Dívida: {formatar_br(divida_atual)}", delta_color="inverse")
         else:
-            st.info("Cadastre cartões na aba 💳 Cartão.")
+            st.info("Sem cartões.")
 
     st.write("---")
     st.subheader("📊 Extrato Detalhado")
@@ -128,31 +138,11 @@ if st.session_state.pagina == "Geral":
         df_ext = df_g.iloc[::-1].copy()
         for _, row in df_ext.iterrows():
             cor = "🔴" if row['Tipo'] == "Saída" else "🟢"
-            info_parc = f" | {int(row['Parcelas'])}x" if row['Parcelas'] > 1 else ""
-            with st.expander(f"{cor} {row['Data']} - {row['Descricao']} ({formatar_br(row['Valor'])}{info_parc})"):
-                st.write(f"**Local:** {row['Forma_Pagamento']} | **Cartão:** {row['Cartao_Vinculado']}")
-                st.write(f"**Categoria:** {row['Categoria']} | **ID:** {row['ID']}")
+            # Destaque para Fatura
+            info_cat = f" [FATURA]" if row['Categoria'] == "Fatura Cartão" else ""
+            with st.expander(f"{cor}{info_cat} {row['Data']} - {row['Descricao']} ({formatar_br(row['Valor'])})"):
+                st.write(f"**De onde saiu:** {row['Forma_Pagamento']} | **Cartão Impactado:** {row['Cartao_Vinculado']}")
                 if st.button("🗑️ Excluir", key=f"del_{row['ID']}"):
                     df_novo = df_g[df_g['ID'] != row['ID']]
                     conn.update(worksheet="Geral", data=df_novo)
                     st.cache_data.clear(); st.rerun()
-
-# --- ABA CARTÃO (GESTÃO) ---
-elif st.session_state.pagina == "Cartao":
-    st.header("💳 Configuração de Cartões")
-    with st.form("novo_c"):
-        n = st.text_input("Nome do Cartão (Ex: Nubank)")
-        l = st.number_input("Limite Total", min_value=0.0)
-        if st.form_submit_button("Salvar"):
-            nc = pd.DataFrame([{"Nome": n, "Limite": l, "ID": str(uuid.uuid4())[:8]}])
-            conn.update(worksheet="MeusCartoes", data=pd.concat([df_cartoes, nc], ignore_index=True))
-            st.cache_data.clear(); st.rerun()
-    
-    if not df_cartoes.empty:
-        for _, r in df_cartoes.iterrows():
-            col1, col2 = st.columns([4,1])
-            col1.write(f"**{r['Nome']}** - Limite: {formatar_br(r['Limite'])}")
-            if col2.button("🗑️", key=f"dc_{r['ID']}"):
-                df_c_novo = df_cartoes[df_cartoes['ID'] != r['ID']]
-                conn.update(worksheet="MeusCartoes", data=df_c_novo)
-                st.cache_data.clear(); st.rerun()
