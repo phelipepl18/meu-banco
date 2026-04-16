@@ -47,7 +47,7 @@ def card_estilizado(titulo, valor, info_extra="", cor_borda="#00FF00"):
     </div>
     """, unsafe_allow_html=True)
 
-# --- NAVEGAÇÃO (ÍCONES REMOVIDOS) ---
+# --- NAVEGAÇÃO ---
 if 'pagina' not in st.session_state: st.session_state.pagina = "Geral"
 
 m1, m2, m3, m4, m5 = st.columns(5)
@@ -150,13 +150,28 @@ if st.session_state.pagina == "Geral":
     if not df_g.empty:
         df_ext = df_g.iloc[::-1].copy()
         for _, row in df_ext.iterrows():
-            tipo_txt = "Saída" if row['Tipo'] == "Saída" else "Entrada"
+            # Define a cor de fundo baseada no tipo
+            cor_fundo = "rgba(255, 75, 75, 0.2)" if row['Tipo'] == "Saída" else "rgba(0, 255, 127, 0.2)"
+            cor_texto = "#FF4B4B" if row['Tipo'] == "Saída" else "#00FF7F"
             info_p = f" | {int(row['Parcelas'])}x" if row['Parcelas'] > 1 else ""
-            with st.expander(f"{row['Data']} - {row['Descricao']} ({formatar_br(row['Valor'])}{info_p})"):
-                st.write(f"**Tipo:** {tipo_txt} | **Local:** {row['Forma_Pagamento']} | **Cartão:** {row['Cartao_Vinculado']} | **Categoria:** {row['Categoria']}")
-                if st.button("Excluir", key=f"del_{row['ID']}"):
-                    conn.update(worksheet="Geral", data=df_g[df_g['ID'] != row['ID']])
-                    st.cache_data.clear(); st.rerun()
+            
+            # Balão colorido para o extrato
+            st.markdown(f"""
+                <div style="background-color: {cor_fundo}; padding: 15px; border-radius: 10px; border-left: 5px solid {cor_texto}; margin-bottom: 10px;">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
+                        <span style="font-weight: bold; color: white;">{row['Data']} - {row['Descricao']}</span>
+                        <span style="font-weight: bold; color: {cor_texto}; font-size: 18px;">{formatar_br(row['Valor'])}{info_p}</span>
+                    </div>
+                    <div style="font-size: 12px; color: #bbb; margin-top: 5px;">
+                        Local: {row['Forma_Pagamento']} | Categoria: {row['Categoria']} | Cartão: {row['Cartao_Vinculado']}
+                    </div>
+                </div>
+            """, unsafe_allow_html=True)
+            
+            # Botão de excluir logo abaixo do balão (Streamlit não permite botões dentro de HTML puro)
+            if st.button("Excluir", key=f"del_{row['ID']}", use_container_width=False):
+                conn.update(worksheet="Geral", data=df_g[df_g['ID'] != row['ID']])
+                st.cache_data.clear(); st.rerun()
 
 # --- PÁGINA CARTÃO ---
 elif st.session_state.pagina == "Cartao":
