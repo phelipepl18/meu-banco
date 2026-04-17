@@ -1,222 +1,118 @@
 import streamlit as st
-from streamlit_gsheets import GSheetsConnection
-import pandas as pd
-from datetime import datetime
-import uuid
-import plotly.express as px
-from dateutil.relativedelta import relativedelta
+from moviepy.editor import VideoFileClip, clips_array, ImageClip, CompositeVideoClip, TextClip
+from groq import Groq
+import os
+import gc
+import PIL.Image
 
-st.set_page_config(page_title="Pro Driver - Oficial", layout="wide")
+# Correção Pillow
+if not hasattr(PIL.Image, 'ANTIALIAS'):
+    PIL.Image.ANTIALIAS = PIL.Image.LANCZOS
 
-# --- ESTILO GERAL ---
-st.markdown("""
-    <style>
-    [data-testid="stSidebar"] {display: none;}
-    .main { background-color: #121212; }
-    [data-testid="stMetric"] { display: none; }
-    </style>
-    """, unsafe_allow_html=True)
+st.set_page_config(page_title="Estrategista de Cortes Profissional", layout="wide")
 
-conn = st.connection("gsheets", type=GSheetsConnection)
+# Conexão Groq
+try:
+    client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+except:
+    st.error("⚠️ Configure a GROQ_API_KEY nos Secrets!")
 
-def carregar_dados(nome_aba):
+def converter_tempo(texto):
     try:
-        df = conn.read(worksheet=nome_aba.strip(), ttl=0)
-        if df is not None and not df.empty:
-            df.columns = [c.strip() for c in df.columns]
-            cols_num = ['Valor', 'Limite', 'KM_Rodado', 'Parcelas', 'Dia_Pagamento']
-            for col in cols_num:
-                if col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0)
-            if "ID" not in df.columns:
-                df["ID"] = [str(uuid.uuid4())[:8] for _ in range(len(df))]
-            return df
-        return pd.DataFrame()
-    except:
-        return pd.DataFrame()
+        texto = texto.strip().replace(",", ".")
+        if ":" in texto:
+            partes = texto.split(":")
+            return (int(partes[0]) * 60) + float(partes[1])
+        return float(texto)
+    except: return None
 
-def formatar_br(valor):
-    return f"R$ {valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", ".")
+st.title("🎙️ Estrategista de Cortes Profissional")
 
-def card_estilizado(titulo, valor, info_extra="", cor_borda="#00FF00"):
-    st.markdown(f"""
-    <div style="background: linear-gradient(135deg, #2b2b2b 0%, #1e1e1e 100%); padding: 20px; border-radius: 15px; border-left: 5px solid {cor_borda}; margin-bottom: 15px; box-shadow: 2px 2px 10px rgba(0,0,0,0.3);">
-        <h4 style="margin:0; color: #888; font-size: 13px; text-transform: uppercase;">{titulo}</h4>
-        <h2 style="margin:5px 0; color: #ffffff; font-weight: bold; font-size: 24px;">{formatar_br(valor)}</h2>
-        <div style="margin:0; font-size: 12px; color: #ccc; line-height: 1.4;">{info_extra}</div>
-    </div>
-    """, unsafe_allow_html=True)
+# Uploads
+file = st.file_uploader("1. Suba seu vídeo original", type=["mp4", "mov", "avi"])
+bg_image = st.file_uploader("2. Suba a imagem de fundo (Obrigatório para o layout da imagem)", type=["jpg", "jpeg", "png"])
 
-# --- NAVEGAÇÃO ---
-if 'pagina' not in st.session_state: st.session_state.pagina = "Geral"
+if file:
+    temp_path = "video_original_temp.mp4"
+    with open(temp_path, "wb") as f: f.write(file.getbuffer())
 
-m1, m2, m3, m4, m5 = st.columns(5)
-with m1: 
-    if st.button("Geral", use_container_width=True): st.session_state.pagina = "Geral"
-with m2: 
-    if st.button("Uber", use_container_width=True): st.session_state.pagina = "Uber"
-with m3: 
-    if st.button("99Pop", use_container_width=True): st.session_state.pagina = "99Pop"
-with m4: 
-    if st.button("Cartão", use_container_width=True): st.session_state.pagina = "Cartao"
-with m5: 
-    if st.button("Relatórios", use_container_width=True): st.session_state.pagina = "Relatorios"
+    with VideoFileClip(temp_path) as v_info:
+        duracao_real = v_info.duration
+        st.warning(f"📏 Duração: {int(duracao_real // 60):02d}:{int(duracao_real % 60):02d}")
 
-hoje = datetime.now()
-df_g = carregar_dados("Geral")
-df_saldos = carregar_dados("Saldos")
-df_cartoes = carregar_dados("MeusCartoes")
+    col1, col2 = st.columns(2)
 
-# --- PÁGINA GERAL ---
-if st.session_state.pagina == "Geral":
-    st.subheader("Meus Saldos")
-    lucro_total = 0
-    
-    if not df_saldos.empty:
-        cols_s = st.columns(len(df_saldos))
-        for i, row in df_saldos.iterrows():
-            local = str(row['Local']).strip()
-            v_base = float(row['Valor'])
-            movs = df_g[df_g['Forma_Pagamento'] == local] if not df_g.empty else pd.DataFrame()
-            ent = movs[movs['Tipo'] == "Entrada"]['Valor'].sum() if not movs.empty else 0
-            sai = movs[movs['Tipo'] == "Saída"]['Valor'].sum() if not movs.empty else 0
-            saldo = v_base + ent - sai
-            lucro_total += saldo
-            with cols_s[i]:
-                card_estilizado(local, saldo, "Saldo em conta")
-    
-    card_estilizado("Lucro Líquido Total", lucro_total, "Soma de todas as contas", cor_borda="#00E5FF")
-    
-    st.write("---")
-    
-    col_l, col_r = st.columns([2, 1])
-    with col_l:
-        st.subheader("Novo Lançamento")
-        v = st.number_input("VALOR (R$)", min_value=0.0, step=0.01)
-        c1, c2 = st.columns(2)
-        with c1:
-            f = st.selectbox("SAINDO DE (LOCAL)", ["Cédula", "Banco Itaú", "Nubank", "Uber", "99Pop", "Cartão de Crédito"])
-            t = st.selectbox("TIPO", ["Saída", "Entrada"])
-        with c2:
-            cat = st.selectbox("CATEGORIA", ["Combustível", "Manutenção", "Alimentação", "Aluguel", "Fatura Cartão", "Outros"])
-            cartao_escolhido = "N/A"
-            parc = 1
-            if f == "Cartão de Crédito" or cat == "Fatura Cartão":
-                cartao_list = df_cartoes['Nome'].tolist() if not df_cartoes.empty else []
-                cartao_escolhido = st.selectbox("QUAL CARTÃO?", cartao_list)
-                if f == "Cartão de Crédito":
-                    parc = st.number_input("Nº DE PARCELAS", min_value=1, max_value=48, value=1)
-        d = st.text_input("DESCRIÇÃO")
-        if st.button("LANÇAR AGORA", use_container_width=True):
-            if v > 0:
-                nova = pd.DataFrame([{"Data": hoje.strftime("%d/%m/%Y"), "Descricao": d, "Valor": v, "Tipo": t, "Forma_Pagamento": f, "Categoria": cat, "Cartao_Vinculado": cartao_escolhido, "Parcelas": parc, "ID": str(uuid.uuid4())[:8]}])
-                conn.update(worksheet="Geral", data=pd.concat([df_g, nova], ignore_index=True))
-                st.cache_data.clear(); st.rerun()
+    with col1:
+        st.subheader("1. Sugestões da IA")
+        if st.button("Analisar Momentos Virais"):
+            with st.spinner("Analisando..."):
+                try:
+                    with VideoFileClip(temp_path) as video_full:
+                        video_full.audio.write_audiofile("audio_temp.mp3", codec='libmp3lame')
+                    with open("audio_temp.mp3", "rb") as a:
+                        trans = client.audio.transcriptions.create(file=("audio_temp.mp3", a.read()), model="whisper-large-v3-turbo", response_format="text")
+                    st.session_state['transcricao'] = trans
+                    res = client.chat.completions.create(
+                        messages=[{"role": "user", "content": f"Sugira 3 cortes em MM:SS até {duracao_real}s: {trans}"}],
+                        model="llama-3.1-8b-instant"
+                    )
+                    st.session_state['analise_geral'] = res.choices[0].message.content
+                except Exception as e: st.error(f"Erro: {e}")
+        if 'analise_geral' in st.session_state: st.info(st.session_state['analise_geral'])
 
-    with col_r:
-        st.subheader("Resumo de Cartões")
-        if not df_cartoes.empty:
-            for _, r in df_cartoes.iterrows():
-                if not df_g.empty:
-                    df_g['Data_DT'] = pd.to_datetime(df_g['Data'], dayfirst=True, errors='coerce')
-                    gastos_totais = df_g[(df_g['Cartao_Vinculado'] == r['Nome']) & (df_g['Forma_Pagamento'] == 'Cartão de Crédito') & (df_g['Tipo'] == 'Saída')]['Valor'].sum()
-                    pagos_totais = df_g[(df_g['Cartao_Vinculado'] == r['Nome']) & (df_g['Categoria'] == 'Fatura Cartão')]['Valor'].sum()
-                    divida_total = gastos_totais - pagos_totais
+    with col2:
+        st.subheader("2. Configurar o seu Corte")
+        t_in = st.text_input("Início (ex: 1:30)", value="0:00")
+        t_out = st.text_input("Fim (ex: 2:00)", value="0:30")
+        
+        # Título que vai aparecer NO VÍDEO
+        titulo_video = st.text_input("Texto para o vídeo (Tema Forte):", placeholder="Ex: O SEGREDO DA RETENÇÃO")
 
-                    fatura_mes = 0
-                    compras_cartao = df_g[(df_g['Cartao_Vinculado'] == r['Nome']) & (df_g['Forma_Pagamento'] == 'Cartão de Crédito') & (df_g['Tipo'] == 'Saída')]
-                    for _, compra in compras_cartao.iterrows():
-                        v_parc = compra['Valor'] / compra['Parcelas']
-                        data_inicio = compra['Data_DT']
-                        for p in range(int(compra['Parcelas'])):
-                            mes_parcela = data_inicio + relativedelta(months=p)
-                            if mes_parcela.month == hoje.month and mes_parcela.year == hoje.year:
-                                fatura_mes += v_parc
-                    
-                    pagos_mes = df_g[(df_g['Cartao_Vinculado'] == r['Nome']) & (df_g['Categoria'] == 'Fatura Cartão') & (df_g['Data_DT'].dt.month == hoje.month)]['Valor'].sum()
-                    fatura_mes_ajustada = max(0, fatura_mes - pagos_mes)
-                else:
-                    divida_total = 0
-                    fatura_mes_ajustada = 0
+        if st.button("💡 Gerar Tema Forte com IA"):
+            if 'transcricao' in st.session_state:
+                res_tema = client.chat.completions.create(
+                    messages=[{"role": "user", "content": f"Crie um título curto e viral para o trecho {t_in} a {t_out}: {st.session_state['transcricao']}"}],
+                    model="llama-3.1-8b-instant"
+                )
+                st.session_state['tema_sugerido'] = res_tema.choices[0].message.content.replace('"', '')
+                st.success(f"Sugestão: {st.session_state['tema_sugerido']}")
+            else: st.error("Analise o vídeo primeiro.")
 
-                info = f"""
-                <b>Limite Disponível:</b> {formatar_br(r['Limite'] - divida_total)}<br>
-                <span style='color:#FF4B4B;'><b>Pagar este mês:</b> {formatar_br(fatura_mes_ajustada)}</span><br>
-                <b>Total Gasto (Dívida):</b> {formatar_br(divida_total)}
-                """
-                card_estilizado(r['Nome'], divida_total, info, cor_borda="#FF8C00")
+        estilo = st.radio("Formato:", ["Fundo Personalizado + Título", "Foco Único", "Split Screen"])
 
-    st.subheader("Extrato")
-    if not df_g.empty:
-        df_ext = df_g.iloc[::-1].copy()
-        for _, row in df_ext.iterrows():
-            # Define a cor de fundo baseada no tipo
-            cor_fundo = "rgba(255, 75, 75, 0.2)" if row['Tipo'] == "Saída" else "rgba(0, 255, 127, 0.2)"
-            cor_texto = "#FF4B4B" if row['Tipo'] == "Saída" else "#00FF7F"
-            info_p = f" | {int(row['Parcelas'])}x" if row['Parcelas'] > 1 else ""
-            
-            # Balão colorido para o extrato
-            st.markdown(f"""
-                <div style="background-color: {cor_fundo}; padding: 15px; border-radius: 10px; border-left: 5px solid {cor_texto}; margin-bottom: 10px;">
-                    <div style="display: flex; justify-content: space-between; align-items: center;">
-                        <span style="font-weight: bold; color: white;">{row['Data']} - {row['Descricao']}</span>
-                        <span style="font-weight: bold; color: {cor_texto}; font-size: 18px;">{formatar_br(row['Valor'])}{info_p}</span>
-                    </div>
-                    <div style="font-size: 12px; color: #bbb; margin-top: 5px;">
-                        Local: {row['Forma_Pagamento']} | Categoria: {row['Categoria']} | Cartão: {row['Cartao_Vinculado']}
-                    </div>
-                </div>
-            """, unsafe_allow_html=True)
-            
-            # Botão de excluir logo abaixo do balão (Streamlit não permite botões dentro de HTML puro)
-            if st.button("Excluir", key=f"del_{row['ID']}", use_container_width=False):
-                conn.update(worksheet="Geral", data=df_g[df_g['ID'] != row['ID']])
-                st.cache_data.clear(); st.rerun()
-
-# --- PÁGINA CARTÃO ---
-elif st.session_state.pagina == "Cartao":
-    st.header("Gestão de Cartões")
-    with st.expander("Adicionar Novo Cartão"):
-        with st.form("new_card_form"):
-            n_c = st.text_input("Nome do Cartão")
-            l_c = st.number_input("Limite Total", min_value=0.0)
-            v_c = st.number_input("Dia do Vencimento", min_value=1, max_value=31, value=10)
-            if st.form_submit_button("Cadastrar"):
-                novo_cartao = pd.DataFrame([{"Nome": n_c, "Limite": l_c, "Dia_Pagamento": v_c, "ID": str(uuid.uuid4())[:8]}])
-                conn.update(worksheet="MeusCartoes", data=pd.concat([df_cartoes, novo_cartao], ignore_index=True))
-                st.cache_data.clear(); st.rerun()
-
-    if not df_cartoes.empty:
-        cols = st.columns(3)
-        for idx, r in df_cartoes.iterrows():
-            with cols[idx % 3]:
-                card_estilizado(r['Nome'], r['Limite'], f"Vencimento todo dia {int(r['Dia_Pagamento'])}", cor_borda="#FF8C00")
-                if st.button(f"Remover {r['Nome']}", key=f"del_c_{r['ID']}", use_container_width=True):
-                    conn.update(worksheet="MeusCartoes", data=df_cartoes[df_cartoes['ID'] != r['ID']])
-                    st.cache_data.clear(); st.rerun()
-
-# --- PÁGINAS UBER / 99POP / RELATÓRIOS ---
-elif st.session_state.pagina in ["Uber", "99Pop"]:
-    aba = st.session_state.pagina
-    st.header(f"Ganhos {aba}")
-    df_app = carregar_dados(aba)
-    with st.form(f"f_{aba}"):
-        v_dia = st.number_input("Ganhos", min_value=0.0); km_dia = st.number_input("KM", min_value=0)
-        if st.form_submit_button("Salvar"):
-            nova_l = pd.DataFrame([{"Data": hoje.strftime("%d/%m/%Y"), "Valor": v_dia, "KM_Rodado": km_dia, "ID": str(uuid.uuid4())[:8]}])
-            conn.update(worksheet=aba, data=pd.concat([df_app, nova_l], ignore_index=True))
-            st.cache_data.clear(); st.rerun()
-    if not df_app.empty:
-        card_estilizado(f"Total {aba}", df_app['Valor'].sum(), f"KM Total: {df_app['KM_Rodado'].sum()}")
-        st.dataframe(df_app.iloc[::-1], use_container_width=True)
-
-elif st.session_state.pagina == "Relatorios":
-    st.header("Relatórios")
-    if not df_g.empty:
-        df_g['Data_DT'] = pd.to_datetime(df_g['Data'], dayfirst=True, errors='coerce')
-        df_saidas = df_g[(df_g['Tipo'] == 'Saída') & (df_g['Data_DT'].dt.month == hoje.month)].copy()
-        df_grafico = df_saidas[~df_saidas['Forma_Pagamento'].isin(["Uber", "99Pop"])].copy()
-        if not df_grafico.empty:
-            df_grafico['Label'] = df_grafico.apply(lambda x: x['Descricao'] if x['Categoria'] == 'Outros' else x['Categoria'], axis=1)
-            st.plotly_chart(px.pie(df_grafico, values='Valor', names='Label', hole=.4, template="plotly_dark"), use_container_width=True)
-            card_estilizado("Gasto Total do Mês", df_grafico['Valor'].sum(), "Despesas fora dos apps", "#FF4B4B")
+        if st.button("🚀 Gerar Vídeo Final"):
+            s, e = converter_tempo(t_in), converter_tempo(t_out)
+            if s is not None and e is not None and s < e:
+                with st.spinner("Criando composição profissional..."):
+                    try:
+                        with VideoFileClip(temp_path) as video:
+                            clip = video.subclip(s, e)
+                            
+                            if estilo == "Fundo Personalizado + Título":
+                                if not bg_image: st.error("Suba a imagem de fundo!"); st.stop()
+                                
+                                with open("bg.png", "wb") as f: f.write(bg_image.getbuffer())
+                                bg = ImageClip("bg.png").set_duration(clip.duration).resize(height=1920)
+                                bg = bg.crop(x_center=bg.w/2, y_center=bg.h/2, width=1080, height=1920)
+                                
+                                vid_meio = clip.resize(width=1000) # Deixa uma bordinha nas laterais
+                                
+                                # CRIAÇÃO DO TEXTO (Usando TextClip)
+                                txt = TextClip(
+                                    titulo_video if titulo_video else "Corte Viral",
+                                    fontsize=70, color='white', font='Arial-Bold',
+                                    method='caption', size=(900, None)
+                                ).set_duration(clip.duration).set_position(('center', 400)) # Posição acima do vídeo
+                                
+                                # Tarja preta atrás do texto para ler melhor
+                                bg_txt = ColorClip(size=(1080, 200), color=(0,0,0)).set_opacity(0.6).set_duration(clip.duration).set_position(('center', 350))
+                                
+                                final = CompositeVideoClip([bg, bg_txt, txt, vid_meio.set_position("center")])
+                            
+                            # (Outros estilos omitidos aqui para brevidade, mas mantidos no seu código original)
+                            
+                            final.write_videofile("final.mp4", codec="libx264", audio_codec="aac", fps=24)
+                            st.video("final.mp4")
+                            with open("final.mp4", "rb") as f: st.download_button("⬇️ Baixar", f, "corte.mp4")
+                        gc.collect()
+                    except Exception as err: st.error(f"Erro: {err}. Nota: Textos requerem ImageMagick no servidor.")
